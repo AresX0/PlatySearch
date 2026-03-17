@@ -13,3 +13,5 @@ venv/
 *.log
 .ruff_cache/
 .pytest_cache/
+webapp-logs/
+webapp-logs.zip
