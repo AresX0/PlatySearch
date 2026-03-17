@@ -1,0 +1,41 @@
+[project]
+name = "platysearch"
+version = "0.1.0"
+description = "An independent search engine focused on accuracy and filtering AI-generated content"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.9,<4",
+    "beautifulsoup4>=4.12,<5",
+    "lxml>=5.1,<6",
+    "fastapi>=0.110,<1",
+    "uvicorn[standard]>=0.27,<1",
+    "pydantic>=2.6,<3",
+    "pydantic-settings>=2.1,<3",
+    "aiosqlite>=0.20,<1",
+    "jinja2>=3.1,<4",
+    "nltk>=3.8,<4",
+    "numpy>=1.26,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pytest-asyncio>=0.23,<1",
+    "ruff>=0.3,<1",
+]
+
+[project.scripts]
+platysearch = "platysearch.cli:main"
+
+[tool.setuptools.package-data]
+platysearch = ["templates/**", "static/**"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

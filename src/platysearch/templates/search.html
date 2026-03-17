@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% if query %}{{ query }} — PlatySearch{% else %}PlatySearch{% endif %}</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2a2d3a;
+      --text: #e0e0e8;
+      --text-dim: #8888a0;
+      --accent: #6c8cff;
+      --accent-hover: #8aa4ff;
+      --warning: #ff8c42;
+      --danger: #ff5252;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ── Hero / Search bar ─────────────────────── */
+    .hero {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 8vh 1rem 2rem;
+    }
+    .hero.compact { padding: 2rem 1rem 1rem; }
+    .logo {
+      margin-bottom: 1.5rem;
+    }
+    .logo img {
+      height: 120px;
+      width: auto;
+      object-fit: contain;
+    }
+    .hero.compact .logo { margin-bottom: 0.8rem; }
+    .hero.compact .logo img { height: 60px; }
+    .search-box {
+      display: flex;
+      width: 100%;
+      max-width: 640px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--surface);
+      transition: border-color 0.2s;
+    }
+    .search-box:focus-within { border-color: var(--accent); }
+    .search-box input {
+      flex: 1;
+      padding: 0.85rem 1.2rem;
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-size: 1rem;
+      outline: none;
+    }
+    .search-box button {
+      padding: 0.85rem 1.4rem;
+      background: var(--accent);
+      border: none;
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .search-box button:hover { background: var(--accent-hover); }
+
+    /* ── Results ───────────────────────────────── */
+    .results {
+      max-width: 700px;
+      margin: 0 auto;
+      padding: 1rem 1rem 4rem;
+    }
+    .result-count {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      margin-bottom: 1rem;
+    }
+    .result {
+      margin-bottom: 1.6rem;
+    }
+    .result a {
+      font-size: 1.15rem;
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .result a:hover { text-decoration: underline; }
+    .result .url {
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      margin-top: 2px;
+      word-break: break-all;
+    }
+    .result .snippet {
+      font-size: 0.92rem;
+      color: var(--text);
+      margin-top: 0.3rem;
+      line-height: 1.5;
+    }
+    .result .badges {
+      margin-top: 0.35rem;
+      display: flex;
+      gap: 0.5rem;
+    }
+    .badge {
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    .badge.ai-low  { background: #1b3a2a; color: #4ade80; }
+    .badge.ai-mid  { background: #3a2e1b; color: var(--warning); }
+    .badge.ai-high { background: #3a1b1b; color: var(--danger); }
+    .no-results {
+      text-align: center;
+      color: var(--text-dim);
+      margin-top: 3rem;
+      font-size: 1.1rem;
+    }
+
+    /* ── Tabs ──────────────────────────────────── */
+    .tabs {
+      display: none;
+      justify-content: center;
+      gap: 0;
+      max-width: 640px;
+      margin: 0.8rem auto 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .hero.compact ~ .tabs,
+    .tabs.visible { display: flex; }
+    .tab {
+      padding: 0.55rem 1.2rem;
+      font-size: 0.88rem;
+      color: var(--text-dim);
+      text-decoration: none;
+      border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+      font-weight: 500;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
+    /* ── Image grid ────────────────────────────── */
+    .image-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 0.8rem;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 1rem;
+    }
+    .image-card {
+      background: var(--surface);
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      transition: border-color 0.2s;
+    }
+    .image-card:hover { border-color: var(--accent); }
+    .image-card img {
+      width: 100%;
+      height: 140px;
+      object-fit: cover;
+      display: block;
+    }
+    .image-card .caption {
+      padding: 0.5rem;
+      font-size: 0.78rem;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .image-card .caption a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    /* ── Video cards ───────────────────────────── */
+    .video-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1rem;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 1rem;
+    }
+    .video-card {
+      background: var(--surface);
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .video-card .thumb {
+      width: 100%;
+      height: 160px;
+      background: var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2rem;
+    }
+    .video-card .info {
+      padding: 0.6rem 0.8rem;
+    }
+    .video-card .info a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 500;
+      font-size: 0.95rem;
+    }
+    .video-card .info .url {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      margin-top: 2px;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <div class="hero {% if results %}compact{% endif %}">
+    <div class="logo"><img src="/static/logo.png" alt="PlatySearch"></div>
+    <form class="search-box" action="/" method="get">
+      <input type="text" name="q" value="{{ query }}" placeholder="Search the real web…" autofocus autocomplete="off">
+      <input type="hidden" name="tab" value="{{ tab }}">
+      <button type="submit">Search</button>
+    </form>
+  </div>
+
+  {% if query %}
+  <nav class="tabs visible">
+    {% for t in ["all", "news", "images", "video"] %}
+    <a class="tab {% if tab == t %}active{% endif %}"
+       href="/?q={{ query | urlencode }}&tab={{ t }}">{{ t | capitalize }}</a>
+    {% endfor %}
+  </nav>
+  {% endif %}
+
+  {% if query %}
+  <div class="results">
+    {% if tab == "images" %}
+      {% if results %}
+      <div class="result-count">{{ results|length }} images</div>
+      <div class="image-grid">
+        {% for r in results %}
+        <div class="image-card">
+          <img src="{{ r.url }}" alt="{{ r.title }}" loading="lazy"
+               onerror="this.parentElement.style.display='none'">
+          <div class="caption"><a href="{{ r.url }}" rel="noopener noreferrer">{{ r.title }}</a></div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="no-results">No images found for "{{ query }}"</div>
+      {% endif %}
+
+    {% elif tab == "video" %}
+      {% if results %}
+      <div class="result-count">{{ results|length }} videos</div>
+      <div class="video-grid">
+        {% for r in results %}
+        <div class="video-card">
+          <div class="thumb">▶</div>
+          <div class="info">
+            <a href="{{ r.url }}" rel="noopener noreferrer">{{ r.title }}</a>
+            <div class="url">{{ r.url }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="no-results">No videos found for "{{ query }}"</div>
+      {% endif %}
+
+    {% else %}
+      {# All + News tabs use the standard list layout #}
+      {% if results %}
+      <div class="result-count">{{ results|length }} results</div>
+    {% for r in results %}
+    <div class="result">
+      <a href="{{ r.url }}" rel="noopener noreferrer">{{ r.title }}</a>
+      <div class="url">{{ r.url }}</div>
+      <div class="snippet">{{ r.snippet }}</div>
+      <div class="badges">
+        {% if r.ai_score < 0.3 %}
+          <span class="badge ai-low">Human ✓</span>
+        {% elif r.ai_score < 0.6 %}
+          <span class="badge ai-mid">Mixed</span>
+        {% else %}
+          <span class="badge ai-high">Likely AI</span>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="no-results">No results found for "{{ query }}"</div>
+    {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+</body>
+</html>
