@@ -37,7 +37,7 @@ class _CSPMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response: Response = await call_next(request)
         response.headers["Content-Security-Policy"] = (
-            "frame-ancestors 'self' https://platysoft.com"
+            "frame-ancestors 'self' https://platysoft.com https://*.platysoft.com"
         )
         return response
 
