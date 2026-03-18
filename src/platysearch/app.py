@@ -60,6 +60,7 @@ async def api_search(
             "snippet": r.snippet,
             "score": round(r.score, 4),
             "ai_score": round(r.ai_score, 4),
+            **({"image_url": r.image_url, "image_alt": r.image_alt} if r.image_url else {}),
         }
         for r in results
     ]

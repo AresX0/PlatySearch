@@ -262,8 +262,10 @@
       <div class="image-grid">
         {% for r in results %}
         <div class="image-card">
-          <img src="{{ r.url }}" alt="{{ r.title }}" loading="lazy"
-               onerror="this.parentElement.style.display='none'">
+          <a href="{{ r.url }}" rel="noopener noreferrer">
+            <img src="{{ r.image_url }}" alt="{{ r.image_alt }}" loading="lazy"
+                 onerror="this.closest('.image-card').style.display='none'">
+          </a>
           <div class="caption"><a href="{{ r.url }}" rel="noopener noreferrer">{{ r.title }}</a></div>
         </div>
         {% endfor %}

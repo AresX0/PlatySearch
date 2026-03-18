@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     scheduler_hour: int = 3
     scheduler_minute: int = 0
     scheduler_timezone: str = "America/Chicago"
-    nightly_crawl_pages: int = 200
-    max_db_size_mb: int = 500
+    nightly_crawl_pages: int = 2000
+    max_db_size_mb: int = 2000
 
     model_config = {"env_prefix": "PLATY_", "env_file": ".env", "extra": "ignore"}
 

@@ -84,6 +84,28 @@ _PREFERRED_DOMAINS: set[str] = {
     "www.cnet.com",
     "www.theverge.com",
     "techcrunch.com",
+    "www.nbcnews.com",
+    "abcnews.go.com",
+    "www.usatoday.com",
+    "www.huffpost.com",
+    "www.usnews.com",
+    "www.chicagotribune.com",
+    "www.chron.com",
+    "abc13.com",
+    "www.vox.com",
+    "www.politico.com",
+    "www.latimes.com",
+    "www.texastribune.org",
+    "www.miamiherald.com",
+    "www.nbclosangeles.com",
+    "www.afp.com",
+    "www.chinadaily.com.cn",
+    "www.scmp.com",
+    "www.aljazeera.com",
+    "www.euronews.com",
+    "www.dw.com",
+    "www.bloomberg.com",
+    "www.cnbc.com",
     # Science & reference
     "www.space.com",
     "www.livescience.com",
@@ -92,15 +114,33 @@ _PREFERRED_DOMAINS: set[str] = {
     "www.history.com",
     "www.ncbi.nlm.nih.gov",
     "www.jstor.org",
+    "www.worldwildlife.org",
+    "wwf.org.au",
+    "animals.sandiegozoo.org",
+    "sandiegozoowildlifealliance.org",
+    "animalia.bio",
+    "bie.ala.org.au",
+    "platypusspot.org",
+    "www.pbs.org",
+    "isc.sans.edu",
+    "onlinedegrees.sandiego.edu",
     # Education
     "www.stanford.edu",
     "www.harvard.edu",
     # Entertainment
     "www.metacritic.com",
     "tvtropes.org",
+    # Social media — preferred
+    "www.youtube.com",
+    "youtube.com",
+    "bsky.app",
+    "www.threads.net",
+    "threads.net",
+    "platypusmatch.bsky.social",
+    "anotherfrakkinpodcast.bsky.social",
 }
 
-# Domains demoted to tertiary results.
+# Domains demoted to mid-page results (around position 6-7).
 _DEMOTED_DOMAINS: set[str] = {
     "en.wikipedia.org",
     "es.wikipedia.org",
@@ -113,8 +153,31 @@ _DEMOTED_DOMAINS: set[str] = {
     "en.wiktionary.org",
 }
 
+# Social media sites pushed to second page and beyond.
+_SOCIAL_MEDIA_DOMAINS: set[str] = {
+    "www.facebook.com",
+    "facebook.com",
+    "www.instagram.com",
+    "instagram.com",
+    "twitter.com",
+    "x.com",
+    "www.tiktok.com",
+    "tiktok.com",
+    "www.reddit.com",
+    "reddit.com",
+    "www.pinterest.com",
+    "pinterest.com",
+    "www.snapchat.com",
+    "www.linkedin.com",
+    "linkedin.com",
+    "mastodon.social",
+    "www.tumblr.com",
+    "tumblr.com",
+}
+
 _PREFERRED_BOOST = 1.5   # multiply score
-_DEMOTED_PENALTY = 0.35  # multiply score (strong demotion)
+_DEMOTED_PENALTY = 0.65  # multiply score (appear ~position 6-7)
+_SOCIAL_MEDIA_PENALTY = 0.20  # push to second page
 
 
 @dataclass
@@ -125,10 +188,15 @@ class SearchResult:
     snippet: str
     score: float
     ai_score: float
+    image_url: str = ""
+    image_alt: str = ""
 
 
 async def search(query: str, tab: str = "all", limit: int = 20) -> list[SearchResult]:
     """Run a search query and return ranked results."""
+    if tab == "images":
+        return await _image_search(query, limit)
+
     tokens = tokenize(query)
     if not tokens:
         return []
@@ -225,6 +293,8 @@ async def search(query: str, tab: str = "all", limit: int = 20) -> list[SearchRe
             domain = urlparse(url).netloc.lower()
             if domain in _PREFERRED_DOMAINS:
                 final_score *= _PREFERRED_BOOST
+            elif domain in _SOCIAL_MEDIA_DOMAINS:
+                final_score *= _SOCIAL_MEDIA_PENALTY
             elif domain in _DEMOTED_DOMAINS:
                 final_score *= _DEMOTED_PENALTY
 
@@ -237,6 +307,99 @@ async def search(query: str, tab: str = "all", limit: int = 20) -> list[SearchRe
                 snippet=snippet,
                 score=final_score,
                 ai_score=ai_score,
+            ))
+
+        results.sort(key=lambda r: r.score, reverse=True)
+        return results[:limit]
+    finally:
+        await db.close()
+
+
+async def _image_search(query: str, limit: int = 40) -> list[SearchResult]:
+    """Find images from pages matching the query."""
+    tokens = tokenize(query)
+    if not tokens:
+        return []
+
+    db = await get_db()
+    try:
+        placeholders = ",".join("?" for _ in tokens)
+        term_rows = await db.execute_fetchall(
+            f"SELECT id FROM terms WHERE term IN ({placeholders})", tokens
+        )
+        if not term_rows:
+            return []
+
+        term_ids = [row[0] for row in term_rows]
+        ph2 = ",".join("?" for _ in term_ids)
+
+        # Get the most relevant pages that have images.
+        rows = await db.execute_fetchall(
+            f"""SELECT po.page_id, SUM(po.tf) AS relevance
+                FROM postings po
+                WHERE po.term_id IN ({ph2})
+                  AND EXISTS (SELECT 1 FROM page_images pi WHERE pi.page_id = po.page_id)
+                GROUP BY po.page_id
+                ORDER BY relevance DESC
+                LIMIT 200""",
+            term_ids,
+        )
+        if not rows:
+            return []
+
+        page_ids = [r[0] for r in rows]
+        relevance_map = {r[0]: r[1] for r in rows}
+        ph3 = ",".join("?" for _ in page_ids)
+
+        # Fetch images with their page info.
+        image_rows = await db.execute_fetchall(
+            f"""SELECT pi.src_url, pi.alt_text, p.id, p.url, p.title,
+                       COALESCE(s.ai_score, 0.0)
+                FROM page_images pi
+                JOIN pages p ON p.id = pi.page_id
+                LEFT JOIN page_scores s ON s.page_id = p.id
+                WHERE pi.page_id IN ({ph3})
+                ORDER BY pi.id""",
+            page_ids,
+        )
+
+        # Build results — one per image, scored by the page relevance.
+        # Use the alt text for matching bonus.
+        query_lower = query.lower()
+        results: list[SearchResult] = []
+        seen_urls: set[str] = set()
+
+        for img_src, alt_text, page_id, page_url, title, ai_score in image_rows:
+            if img_src in seen_urls:
+                continue
+            seen_urls.add(img_src)
+
+            relevance = relevance_map.get(page_id, 0.0)
+            score = relevance * 10.0
+
+            # Boost images whose alt text matches query.
+            alt_lower = (alt_text or "").lower()
+            if any(t in alt_lower for t in tokens):
+                score *= 1.5
+
+            # Domain preference.
+            domain = urlparse(page_url).netloc.lower()
+            if domain in _PREFERRED_DOMAINS:
+                score *= _PREFERRED_BOOST
+            elif domain in _SOCIAL_MEDIA_DOMAINS:
+                score *= _SOCIAL_MEDIA_PENALTY
+            elif domain in _DEMOTED_DOMAINS:
+                score *= _DEMOTED_PENALTY
+
+            results.append(SearchResult(
+                page_id=page_id,
+                url=page_url,
+                title=title or page_url,
+                snippet=alt_text or "",
+                score=score,
+                ai_score=ai_score,
+                image_url=img_src,
+                image_alt=alt_text or title or "",
             ))
 
         results.sort(key=lambda r: r.score, reverse=True)

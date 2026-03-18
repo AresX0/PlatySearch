@@ -57,12 +57,22 @@ CREATE TABLE IF NOT EXISTS crawl_queue (
     added_at TEXT    DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS page_images (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    page_id  INTEGER NOT NULL REFERENCES pages(id),
+    src_url  TEXT    NOT NULL,
+    alt_text TEXT    DEFAULT '',
+    width    INTEGER DEFAULT 0,
+    height   INTEGER DEFAULT 0
+);
+
 CREATE INDEX IF NOT EXISTS idx_pages_url ON pages(url);
 CREATE INDEX IF NOT EXISTS idx_pages_domain ON pages(domain);
 CREATE INDEX IF NOT EXISTS idx_terms_term ON terms(term);
 CREATE INDEX IF NOT EXISTS idx_postings_term ON postings(term_id);
 CREATE INDEX IF NOT EXISTS idx_crawl_queue_domain ON crawl_queue(domain);
 CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_url);
+CREATE INDEX IF NOT EXISTS idx_page_images_page ON page_images(page_id);
 """
 
 

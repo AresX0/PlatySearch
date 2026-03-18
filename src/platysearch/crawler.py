@@ -186,6 +186,14 @@ async def crawl(
                             (link, link_domain, depth + 1),
                         )
 
+                    # Store extracted images.
+                    for img in parsed.images:
+                        await db.execute(
+                            "INSERT INTO page_images (page_id, src_url, alt_text, width, height) "
+                            "VALUES (?, ?, ?, ?, ?)",
+                            (page_id, img.src, img.alt, img.width, img.height),
+                        )
+
                     fetched += 1
                     log.info("[%d] Crawled: %s (%s)", fetched, parsed.title or "(no title)", url)
 
