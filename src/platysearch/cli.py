@@ -20,6 +20,9 @@ def main() -> None:
     crawl_p = sub.add_parser("crawl", help="Crawl from seed URLs")
     crawl_p.add_argument("--seeds", nargs="+", required=True, help="Seed URLs to start crawling")
     crawl_p.add_argument("--max-pages", type=int, default=None, help="Max pages (overrides config)")
+    crawl_p.add_argument("--skip-wikipedia", action="store_true", help="Skip Wikipedia domains during this crawl")
+    crawl_p.add_argument("--incremental-index", type=int, default=0, metavar="N",
+                         help="Re-index every N pages during crawl (0=disabled)")
 
     # index
     sub.add_parser("index", help="(Re-)build the search index")
@@ -54,7 +57,20 @@ def main() -> None:
     elif args.command == "crawl":
         from platysearch.crawler import crawl
 
-        count = asyncio.run(crawl(args.seeds, max_pages=args.max_pages))
+        skip_domains: set[str] | None = None
+        if args.skip_wikipedia:
+            skip_domains = {
+                "en.wikipedia.org", "es.wikipedia.org", "fr.wikipedia.org",
+                "de.wikipedia.org", "ja.wikipedia.org", "zh.wikipedia.org",
+                "ru.wikipedia.org", "en.wikisource.org", "en.wiktionary.org",
+                "en.m.wikipedia.org",
+            }
+        count = asyncio.run(crawl(
+            args.seeds,
+            max_pages=args.max_pages,
+            skip_domains=skip_domains,
+            incremental_index_interval=args.incremental_index,
+        ))
         print(f"Crawled {count} pages.")
 
     elif args.command == "index":

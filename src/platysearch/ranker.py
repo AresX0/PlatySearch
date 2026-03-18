@@ -5,12 +5,116 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from platysearch.config import get_settings
 from platysearch.database import get_db
 from platysearch.indexer import tokenize
 
 log = logging.getLogger(__name__)
+
+# ── Domain ranking signals ───────────────────────────────────────────────────
+
+# Domains that get a ranking boost (primary sources, official sites, quality content).
+_PREFERRED_DOMAINS: set[str] = {
+    "memory-alpha.fandom.com",
+    "disney.fandom.com",
+    "www.startrek.com",
+    "www.starwars.com",
+    "www.disney.com",
+    "www.marvel.com",
+    "www.dc.com",
+    "www.dndbeyond.com",
+    "www.ex-astris-scientia.org",
+    "www.stargatearchive.com",
+    "www.thecompanion.app",
+    "www.imdb.com",
+    "www.rottentomatoes.com",
+    "www.bcm.edu",
+    "www.rice.edu",
+    "news.rice.edu",
+    "www.mit.edu",
+    "news.mit.edu",
+    "www.tcd.ie",
+    "pubmed.ncbi.nlm.nih.gov",
+    "www.sciencedaily.com",
+    "www.newscientist.com",
+    "www.scientificamerican.com",
+    "www.the-scientist.com",
+    "www.sciencenews.org",
+    "www.science.org",
+    "phys.org",
+    "www.advancedsciencenews.com",
+    "www.popsci.com",
+    "apnews.com",
+    "www.npr.org",
+    "www.bbc.com",
+    "www.bbc.co.uk",
+    "www.reuters.com",
+    "www.nature.com",
+    "arstechnica.com",
+    "www.wired.com",
+    "www.darkreading.com",
+    "thehackernews.com",
+    "www.sans.org",
+    "krebsonsecurity.com",
+    "www.nationalgeographic.com",
+    "www.loc.gov",
+    "www.britannica.com",
+    "www.forbes.com",
+    "plato.stanford.edu",
+    # Government / official
+    "www.nasa.gov",
+    "science.nasa.gov",
+    "www.jpl.nasa.gov",
+    "hubblesite.org",
+    "webb.nasa.gov",
+    "www.spacex.com",
+    "www.fbi.gov",
+    "www.uscourts.gov",
+    "www.dps.texas.gov",
+    "www.congress.gov",
+    # News & media
+    "www.nytimes.com",
+    "variety.com",
+    "www.hollywoodreporter.com",
+    "deadline.com",
+    "www.theguardian.com",
+    "www.washingtonpost.com",
+    "www.cnet.com",
+    "www.theverge.com",
+    "techcrunch.com",
+    # Science & reference
+    "www.space.com",
+    "www.livescience.com",
+    "www.astronomy.com",
+    "www.smithsonianmag.com",
+    "www.history.com",
+    "www.ncbi.nlm.nih.gov",
+    "www.jstor.org",
+    # Education
+    "www.stanford.edu",
+    "www.harvard.edu",
+    # Entertainment
+    "www.metacritic.com",
+    "tvtropes.org",
+}
+
+# Domains demoted to tertiary results.
+_DEMOTED_DOMAINS: set[str] = {
+    "en.wikipedia.org",
+    "es.wikipedia.org",
+    "fr.wikipedia.org",
+    "de.wikipedia.org",
+    "ja.wikipedia.org",
+    "zh.wikipedia.org",
+    "ru.wikipedia.org",
+    "en.wikisource.org",
+    "en.wiktionary.org",
+}
+
+_PREFERRED_BOOST = 1.5   # multiply score
+_DEMOTED_PENALTY = 0.35  # multiply score (strong demotion)
 
 
 @dataclass
@@ -113,9 +217,16 @@ async def search(query: str, tab: str = "all", limit: int = 20) -> list[SearchRe
             )
 
             # ── AI-content penalty ──
-            # ai_score ∈ [0, 1] — higher means more likely AI.
+            # ai_score in [0, 1] — higher means more likely AI.
             ai_multiplier = 1.0 - ai_score * (1.0 - settings.ai_penalty)
             final_score = raw_score * ai_multiplier
+
+            # ── Domain preference signal ──
+            domain = urlparse(url).netloc.lower()
+            if domain in _PREFERRED_DOMAINS:
+                final_score *= _PREFERRED_BOOST
+            elif domain in _DEMOTED_DOMAINS:
+                final_score *= _DEMOTED_PENALTY
 
             snippet = _make_snippet(body or "", tokens)
 

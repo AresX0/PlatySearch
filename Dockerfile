@@ -19,8 +19,8 @@ COPY data/VERSION /app/seed/VERSION
 EXPOSE 8000
 
 ENV PORT=8000
-# Use /home/data for persistent storage on Azure App Service.
-ENV PLATY_DB_PATH=/home/data/platysearch.db
+# DB path — matches pydantic default so the app works even without env-var.
+ENV PLATY_DB_PATH=/app/data/platysearch.db
 
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
