@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Query, Request
@@ -89,3 +91,58 @@ async def home(request: Request, q: str | None = None, tab: str = "all"):
             "fallback": fallback,
         },
     )
+
+
+# ── Admin / debug endpoints ─────────────────────────────────────────────────
+
+
+@app.get("/debug/db")
+async def debug_db() -> dict:
+    """Return DB stats (page counts, tables, size)."""
+    import aiosqlite
+    from platysearch.config import get_settings
+
+    settings = get_settings()
+    db_path = Path(settings.db_path)
+    info: dict = {
+        "db_path": str(db_path),
+        "env_PLATY_DB_PATH": os.environ.get("PLATY_DB_PATH", ""),
+        "exists": db_path.exists(),
+        "size_mb": round(db_path.stat().st_size / (1024 * 1024), 1) if db_path.exists() else 0,
+    }
+    if db_path.exists():
+        async with aiosqlite.connect(str(db_path)) as db:
+            rows = await db.execute_fetchall(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            )
+            tables = [r[0] for r in rows]
+            info["tables"] = tables
+            counts = {}
+            for t in tables:
+                row = await db.execute_fetchall(f"SELECT COUNT(*) FROM [{t}]")  # noqa: S608
+                counts[t] = row[0][0]
+            info["row_counts"] = counts
+    return info
+
+
+@app.post("/admin/reindex")
+async def admin_reindex() -> dict:
+    """Trigger a full index + score rebuild in the background."""
+    from platysearch.indexer import build_index
+    from platysearch.ranker import compute_scores
+
+    async def _run():
+        await build_index()
+        await compute_scores()
+
+    asyncio.create_task(_run())
+    return {"status": "started", "message": "Index + score rebuild started in background"}
+
+
+@app.post("/admin/init-db")
+async def admin_init_db() -> dict:
+    """Ensure all tables exist (e.g. after schema changes)."""
+    from platysearch.database import init_db
+
+    await init_db()
+    return {"status": "ok", "message": "Database schema initialised"}
