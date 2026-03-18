@@ -358,7 +358,7 @@ def start_scheduler() -> AsyncIOScheduler:
 
     _scheduler.start()
     log.info(
-        "Scheduler started — crawl every 4 hours (first run NOW), hourly refresh enabled",
+        "Scheduler started - crawl every 4 hours (first run NOW), hourly refresh enabled",
     )
     return _scheduler
 
