@@ -236,6 +236,15 @@ async def _nightly_update_inner() -> None:
     settings = get_settings()
     max_db_mb = settings.max_db_size_mb
 
+    # ── Check if crawl is disabled ───────────────────────────────────────
+    if not settings.crawl_enabled:
+        log.info("Crawl is disabled (PLATY_CRAWL_ENABLED=false). Skipping to index/score.")
+        await index_all_pages()
+        await compute_link_scores()
+        await score_all_pages()
+        _persist_db(settings.db_path)
+        return
+
     # ── Check DB size ────────────────────────────────────────────────────
     db_path = settings.db_path
     if db_path.exists():

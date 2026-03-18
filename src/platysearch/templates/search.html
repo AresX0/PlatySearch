@@ -120,6 +120,7 @@
     .badge.ai-low  { background: #1b3a2a; color: #4ade80; }
     .badge.ai-mid  { background: #3a2e1b; color: var(--warning); }
     .badge.ai-high { background: #3a1b1b; color: var(--danger); }
+    .badge.federated { background: #1b2a3a; color: #60a5fa; }
     .no-results {
       text-align: center;
       color: var(--text-dim);
@@ -257,8 +258,8 @@
     </div>
     {% endif %}
     {% if tab == "images" and not fallback %}
-      {% if results %}
-      <div class="result-count">{{ results|length }} images</div>
+      {% if results or federated_results %}
+      <div class="result-count">{{ results|length }}{% if federated_results %} + {{ federated_results|length }} federated{% endif %} images</div>
       <div class="image-grid">
         {% for r in results %}
         <div class="image-card">
@@ -268,6 +269,17 @@
           </a>
           <div class="caption"><a href="{{ r.url }}" rel="noopener noreferrer">{{ r.title }}</a></div>
         </div>
+        {% endfor %}
+        {% for r in federated_results %}
+        {% if r.image_url %}
+        <div class="image-card">
+          <a href="{{ r.url }}" rel="noopener noreferrer">
+            <img src="{{ r.image_url }}" alt="{{ r.image_alt }}" loading="lazy"
+                 onerror="this.closest('.image-card').style.display='none'">
+          </a>
+          <div class="caption"><a href="{{ r.url }}" rel="noopener noreferrer">{{ r.title }}</a></div>
+        </div>
+        {% endif %}
         {% endfor %}
       </div>
       {% else %}
@@ -295,7 +307,7 @@
     {% else %}
       {# All + News tabs use the standard list layout #}
       {% if results %}
-      <div class="result-count">{{ results|length }} results</div>
+      <div class="result-count">{{ results|length }}{% if federated_results %} + {{ federated_results|length }} federated{% endif %} results</div>
     {% for r in results %}
     <div class="result">
       <a href="{{ r.url }}" rel="noopener noreferrer">{{ r.title }}</a>
@@ -312,8 +324,51 @@
       </div>
     </div>
     {% endfor %}
+
+    {# ── Federated results from peer servers ── #}
+    {% if federated_results %}
+    {% for r in federated_results %}
+    <div class="result">
+      <a href="{{ r.url }}" rel="noopener noreferrer">{{ r.title }}</a>
+      <div class="url">{{ r.url }}</div>
+      <div class="snippet">{{ r.snippet }}</div>
+      <div class="badges">
+        {% if r.ai_score < 0.3 %}
+          <span class="badge ai-low">Human ✓</span>
+        {% elif r.ai_score < 0.6 %}
+          <span class="badge ai-mid">Mixed</span>
+        {% else %}
+          <span class="badge ai-high">Likely AI</span>
+        {% endif %}
+        <span class="badge federated">via {{ r.peer_name }}</span>
+      </div>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    {% else %}
+    {% if federated_results %}
+    <div class="result-count">{{ federated_results|length }} federated results</div>
+    {% for r in federated_results %}
+    <div class="result">
+      <a href="{{ r.url }}" rel="noopener noreferrer">{{ r.title }}</a>
+      <div class="url">{{ r.url }}</div>
+      <div class="snippet">{{ r.snippet }}</div>
+      <div class="badges">
+        {% if r.ai_score < 0.3 %}
+          <span class="badge ai-low">Human ✓</span>
+        {% elif r.ai_score < 0.6 %}
+          <span class="badge ai-mid">Mixed</span>
+        {% else %}
+          <span class="badge ai-high">Likely AI</span>
+        {% endif %}
+        <span class="badge federated">via {{ r.peer_name }}</span>
+      </div>
+    </div>
+    {% endfor %}
     {% else %}
     <div class="no-results">No results found for "{{ query }}"</div>
+    {% endif %}
     {% endif %}
     {% endif %}
   </div>

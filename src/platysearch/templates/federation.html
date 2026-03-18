@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Federation — PlatySearch Admin</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2a2d3a;
+      --text: #e0e0e8;
+      --text-dim: #8888a0;
+      --accent: #6c8cff;
+      --accent-hover: #8aa4ff;
+      --green: #4ade80;
+      --yellow: #fbbf24;
+      --red: #ff5252;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 2rem 1rem;
+    }
+    .container { max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 1.6rem; margin-bottom: 0.3rem; }
+    .subtitle { color: var(--text-dim); font-size: 0.9rem; margin-bottom: 2rem; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-size: 0.85em; }
+
+    /* ── Cards ──────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .card h2 { font-size: 1.15rem; margin-bottom: 1rem; }
+
+    /* ── Stats row ─────────────────────────────── */
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .stat {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      text-align: center;
+    }
+    .stat .value { font-size: 1.8rem; font-weight: 700; }
+    .stat .label { font-size: 0.75rem; color: var(--text-dim); margin-top: 0.2rem; }
+    .stat .value.on  { color: var(--green); }
+    .stat .value.off { color: var(--red); }
+
+    /* ── Forms ──────────────────────────────────── */
+    .form-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.8rem 1rem;
+      background: rgba(255,255,255,0.03);
+      border-radius: 8px;
+      margin-bottom: 0.5rem;
+    }
+    .form-row label { font-size: 0.9rem; font-weight: 500; }
+    .form-row .hint { font-size: 0.75rem; color: var(--text-dim); }
+    select, input[type="url"], input[type="text"] {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 0.5rem 0.8rem;
+      border-radius: 6px;
+      font-size: 0.88rem;
+    }
+    select:focus, input:focus { outline: none; border-color: var(--accent); }
+    .toggle { position: relative; display: inline-block; width: 44px; height: 24px; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle .slider {
+      position: absolute; cursor: pointer; inset: 0;
+      background: #555; border-radius: 24px; transition: 0.3s;
+    }
+    .toggle .slider::before {
+      content: ""; position: absolute; height: 18px; width: 18px;
+      left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.3s;
+    }
+    .toggle input:checked + .slider { background: var(--green); }
+    .toggle input:checked + .slider::before { transform: translateX(20px); }
+
+    .btn {
+      display: inline-block;
+      padding: 0.5rem 1.2rem;
+      border-radius: 6px;
+      border: none;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+      text-decoration: none;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-green  { background: #166534; color: #fff; }
+    .btn-red    { background: #991b1b; color: #fff; }
+    .btn-small  { padding: 0.3rem 0.8rem; font-size: 0.78rem; }
+
+    .connect-form {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 0.8rem;
+    }
+    .connect-form input { flex: 1; }
+
+    /* ── Peer list ─────────────────────────────── */
+    .peer {
+      padding: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .peer:last-child { border-bottom: none; }
+    .peer-header { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+    .peer-name { font-weight: 600; font-size: 1rem; }
+    .badge {
+      font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; font-weight: 600;
+    }
+    .badge-active  { background: #1b3a2a; color: var(--green); }
+    .badge-pending { background: #3a2e1b; color: var(--yellow); }
+    .badge-blocked { background: #3a1b1b; color: var(--red); }
+    .peer-meta { font-size: 0.8rem; color: var(--text-dim); margin-top: 0.3rem; }
+    .peer-meta code { font-size: 0.75rem; }
+    .peer-actions { display: flex; gap: 0.4rem; margin-top: 0.6rem; flex-wrap: wrap; }
+
+    /* ── Alert ──────────────────────────────────── */
+    .alert {
+      padding: 0.8rem 1rem;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+      font-size: 0.9rem;
+    }
+    .alert-success { background: #1b3a2a; color: var(--green); border: 1px solid #166534; }
+    .alert-error   { background: #3a1b1b; color: var(--red); border: 1px solid #991b1b; }
+    .alert-warning { background: #3a2e1b; color: var(--yellow); border: 1px solid #854d0e; }
+
+    .back-link { margin-bottom: 1rem; display: inline-block; font-size: 0.88rem; }
+
+    /* ── Identity ──────────────────────────────── */
+    .identity-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.8rem;
+      font-size: 0.88rem;
+    }
+    .identity-grid .label { color: var(--text-dim); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <a href="/" class="back-link">&larr; Back to Search</a>
+    <h1>Federation Network</h1>
+    <p class="subtitle">Manage your distributed search network — share and receive results from other PlatySearch servers.</p>
+
+    {% if message %}
+    <div class="alert {{ 'alert-success' if message_type == 'success' else 'alert-error' if message_type == 'error' else 'alert-warning' }}">
+      {{ message }}
+    </div>
+    {% endif %}
+
+    <!-- Stats -->
+    <div class="stats">
+      <div class="stat">
+        <div class="value {{ 'on' if settings.enabled else 'off' }}">{{ "ON" if settings.enabled else "OFF" }}</div>
+        <div class="label">Federation</div>
+      </div>
+      <div class="stat">
+        <div class="value" style="color: var(--green);">{{ stats.active }}</div>
+        <div class="label">Active Peers</div>
+      </div>
+      <div class="stat">
+        <div class="value" style="color: var(--yellow);">{{ stats.pending }}</div>
+        <div class="label">Pending</div>
+      </div>
+      <div class="stat">
+        <div class="value" style="color: var(--red);">{{ stats.blocked }}</div>
+        <div class="label">Blocked</div>
+      </div>
+    </div>
+
+    {% if not settings.enabled %}
+    <div class="alert alert-warning">
+      Federation is disabled. Enable it below to share and receive search results from other PlatySearch servers.
+    </div>
+    {% endif %}
+
+    <!-- Settings -->
+    <div class="card">
+      <h2>Settings</h2>
+      <form method="POST" action="/admin/federation/settings">
+        <div class="form-row">
+          <div>
+            <label>Federation Enabled</label>
+            <div class="hint">Master switch for all federation features</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" name="enabled" value="1" {{ "checked" if settings.enabled }}>
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>Peer Approval Mode</label>
+            <div class="hint">How incoming peer registrations are handled</div>
+          </div>
+          <select name="mode">
+            <option value="approve" {{ "selected" if settings.mode == "approve" }}>Manual Approve</option>
+            <option value="open" {{ "selected" if settings.mode == "open" }}>Open (Auto-Accept)</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>Share Results</label>
+            <div class="hint">Allow peers to query your local index</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" name="share_results" value="1" {{ "checked" if settings.share_results }}>
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>Accept Results</label>
+            <div class="hint">Include results from peers in local searches</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" name="accept_results" value="1" {{ "checked" if settings.accept_results }}>
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div style="margin-top: 1rem; text-align: right;">
+          <button type="submit" class="btn btn-primary">Save Settings</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Server Identity -->
+    <div class="card">
+      <h2>This Server</h2>
+      <div class="identity-grid">
+        <div><span class="label">DID:</span></div>
+        <div><code>{{ server_info.did }}</code></div>
+        <div><span class="label">Protocol:</span></div>
+        <div><code>v{{ server_info.version }}</code></div>
+        <div><span class="label">Pages indexed:</span></div>
+        <div>{{ server_info.pageCount }}</div>
+        <div><span class="label">XRPC Describe:</span></div>
+        <div><a href="/xrpc/app.platysearch.server.describe" target="_blank">/xrpc/app.platysearch.server.describe</a></div>
+      </div>
+    </div>
+
+    <!-- Connect to Peer -->
+    <div class="card">
+      <h2>Connect to a Peer</h2>
+      <p style="font-size: 0.88rem; color: var(--text-dim); margin-bottom: 0.5rem;">
+        Enter the URL of another PlatySearch instance to start sharing results.
+      </p>
+      <form method="POST" action="/admin/federation/register" class="connect-form">
+        <input type="url" name="peer_url" placeholder="https://other-platysearch.example.com" required>
+        <button type="submit" class="btn btn-primary">Connect</button>
+      </form>
+    </div>
+
+    <!-- Peer List -->
+    <div class="card">
+      <h2>Federated Peers</h2>
+      {% if peers %}
+        {% for peer in peers %}
+        <div class="peer">
+          <div class="peer-header">
+            <span class="peer-name">{{ peer.name or peer.url }}</span>
+            {% if peer.status == "active" %}
+              <span class="badge badge-active">Active</span>
+            {% elif peer.status == "pending" %}
+              <span class="badge badge-pending">Pending</span>
+            {% elif peer.status == "blocked" %}
+              <span class="badge badge-blocked">Blocked</span>
+            {% endif %}
+          </div>
+          <div class="peer-meta">
+            <code>{{ peer.did }}</code><br>
+            <a href="{{ peer.url }}" target="_blank" rel="noopener">{{ peer.url }}</a>
+            {% if peer.admin_email %} &middot; {{ peer.admin_email }}{% endif %}
+          </div>
+          <div class="peer-meta">
+            Protocol v{{ peer.protocol_version }}
+            {% if peer.last_seen_at %} &middot; Last seen: {{ peer.last_seen_at }}{% endif %}
+            {% if peer.approved_at %} &middot; Approved: {{ peer.approved_at }}{% endif %}
+            {% if peer.block_reason %} &middot; Reason: {{ peer.block_reason }}{% endif %}
+          </div>
+          <div class="peer-actions">
+            {% if peer.status == "pending" %}
+              <form method="POST" action="/admin/federation/approve" style="display:inline">
+                <input type="hidden" name="peer_id" value="{{ peer.id }}">
+                <button type="submit" class="btn btn-green btn-small">Approve</button>
+              </form>
+            {% endif %}
+            {% if peer.status != "blocked" %}
+              <form method="POST" action="/admin/federation/block" style="display:inline">
+                <input type="hidden" name="peer_id" value="{{ peer.id }}">
+                <button type="submit" class="btn btn-red btn-small">Block</button>
+              </form>
+            {% endif %}
+            {% if peer.status == "blocked" %}
+              <form method="POST" action="/admin/federation/approve" style="display:inline">
+                <input type="hidden" name="peer_id" value="{{ peer.id }}">
+                <button type="submit" class="btn btn-green btn-small">Unblock</button>
+              </form>
+            {% endif %}
+            <form method="POST" action="/admin/federation/remove" style="display:inline"
+                  onsubmit="return confirm('Remove this peer permanently?')">
+              <input type="hidden" name="peer_id" value="{{ peer.id }}">
+              <button type="submit" class="btn btn-red btn-small" style="opacity:0.7">Remove</button>
+            </form>
+          </div>
+        </div>
+        {% endfor %}
+      {% else %}
+        <p style="color: var(--text-dim); text-align: center; padding: 2rem;">
+          No peers connected yet. Use the form above to connect to another PlatySearch instance.
+        </p>
+      {% endif %}
+    </div>
+
+  </div>
+</body>
+</html>
