@@ -41,6 +41,10 @@ async def debug_db() -> dict:
     db_path = str(settings.db_path)
     exists = os.path.exists(db_path)
     size_mb = round(os.path.getsize(db_path) / (1024 * 1024), 1) if exists else 0
+
+    # Debug env
+    env_val = os.environ.get("PLATY_DB_PATH", "<not set>")
+
     tables: list[str] = []
     row_counts: dict[str, int] = {}
     if exists:
@@ -57,6 +61,7 @@ async def debug_db() -> dict:
             await db.close()
     return {
         "db_path": db_path,
+        "env_PLATY_DB_PATH": env_val,
         "exists": exists,
         "size_mb": size_mb,
         "tables": tables,
