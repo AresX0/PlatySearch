@@ -43,7 +43,8 @@ class _CSPMiddleware(BaseHTTPMiddleware):
         )
         # Remove X-Frame-Options so the CSP frame-ancestors directive takes
         # precedence (Azure App Service may inject SAMEORIGIN by default).
-        response.headers.pop("X-Frame-Options", None)
+        if "X-Frame-Options" in response.headers:
+            del response.headers["X-Frame-Options"]
         return response
 
 
