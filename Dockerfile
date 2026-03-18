@@ -13,8 +13,11 @@ RUN pip install --no-cache-dir . && \
     python -c "import nltk; nltk.download('punkt_tab', quiet=True); nltk.download('stopwords', quiet=True)"
 
 # Include compressed seed database (decompressed at first startup).
-COPY data/platysearch.db.gz /app/seed/platysearch.db.gz
-COPY data/VERSION /app/seed/VERSION
+# The seed is only needed for first-ever deploy or storage wipe.
+# For code-only deploys the persistent /home/data/ DB is reused.
+RUN mkdir -p /app/seed
+COPY data/platysearch.db.g[z] /app/seed/
+COPY data/VERSIO[N] /app/seed/
 
 EXPOSE 8000
 

@@ -34,7 +34,7 @@ elif [ -f "$SEED_VER_FILE" ]; then
     fi
 fi
 
-if [ "$need_seed" = "1" ]; then
+if [ "$need_seed" = "1" ] && [ -f "/app/seed/platysearch.db.gz" ]; then
     echo "Decompressing seed database to $DB_PATH ..."
     gunzip -c /app/seed/platysearch.db.gz > "$DB_PATH"
     [ -f "$SEED_VER_FILE" ] && cp "$SEED_VER_FILE" "$LIVE_VER_FILE"

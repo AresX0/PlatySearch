@@ -6,6 +6,7 @@ venv/
 **/*.db
 *.db-wal
 *.db-shm
+*.db.gz
 .env
 .git/
 .pytest_cache/
