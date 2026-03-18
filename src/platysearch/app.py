@@ -129,7 +129,7 @@ async def home(request: Request, q: str | None = None, tab: str = "all"):
 
 
 @app.get("/admin/login", response_class=HTMLResponse)
-async def admin_login_page(request: Request, next: str = "/admin/federation"):
+async def admin_login_page(request: Request, next: str = "/admin/dashboard"):
     from platysearch.auth import is_authenticated
 
     if is_authenticated(request):
@@ -141,7 +141,7 @@ async def admin_login_page(request: Request, next: str = "/admin/federation"):
 
 
 @app.post("/admin/login")
-async def admin_login(request: Request, password: str = Form(...), next: str = Form("/admin/federation")):
+async def admin_login(request: Request, password: str = Form(...), next: str = Form("/admin/dashboard")):
     from platysearch.auth import check_password, create_session_cookie
 
     if not check_password(password):
@@ -164,6 +164,149 @@ async def admin_logout():
     resp = RedirectResponse("/admin/login", status_code=303)
     resp.delete_cookie("ps_admin")
     return resp
+
+
+# ── Admin Dashboard ──────────────────────────────────────────────────────────
+
+
+@app.get("/admin/dashboard", response_class=HTMLResponse)
+async def admin_dashboard(request: Request, message: str = "", message_type: str = ""):
+    from platysearch.auth import require_admin
+
+    if redirect := require_admin(request):
+        return redirect
+
+    import aiosqlite
+    from platysearch.config import get_settings
+    from platysearch.database import list_custom_seeds
+    from platysearch.scheduler import (
+        _NIGHTLY_SEEDS,
+        get_current_job,
+        get_job_history,
+        get_next_run_times,
+    )
+
+    settings = get_settings()
+    db_path = Path(settings.db_path)
+
+    # Gather DB stats
+    db_stats: dict = {"pages": 0, "postings": 0, "db_size_mb": 0, "queue": 0}
+    if db_path.exists():
+        db_stats["db_size_mb"] = db_path.stat().st_size / (1024 * 1024)
+        try:
+            async with aiosqlite.connect(str(db_path)) as db:
+                row = await db.execute_fetchall("SELECT COUNT(*) FROM pages")
+                db_stats["pages"] = row[0][0]
+                row = await db.execute_fetchall("SELECT COUNT(*) FROM postings")
+                db_stats["postings"] = row[0][0]
+                row = await db.execute_fetchall("SELECT COUNT(*) FROM crawl_queue")
+                db_stats["queue"] = row[0][0]
+        except Exception:
+            pass
+
+    custom_seeds = await list_custom_seeds()
+
+    return templates.TemplateResponse(
+        "admin.html",
+        {
+            "request": request,
+            "current_job": get_current_job(),
+            "history": get_job_history(),
+            "next_runs": get_next_run_times(),
+            "db_stats": db_stats,
+            "custom_seeds": custom_seeds,
+            "builtin_seed_count": len(_NIGHTLY_SEEDS),
+            "message": message,
+            "message_type": message_type,
+        },
+    )
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_redirect():
+    return RedirectResponse("/admin/dashboard", status_code=303)
+
+
+@app.post("/admin/trigger/crawl")
+async def admin_trigger_crawl(request: Request):
+    from platysearch.auth import require_admin
+
+    if redirect := require_admin(request):
+        return redirect
+
+    from platysearch.scheduler import trigger_crawl
+
+    try:
+        await trigger_crawl()
+        msg = "Crawl+index started"
+        msg_type = "success"
+    except RuntimeError as e:
+        msg = str(e)
+        msg_type = "error"
+    return RedirectResponse(
+        f"/admin/dashboard?message={msg}&message_type={msg_type}",
+        status_code=303,
+    )
+
+
+@app.post("/admin/trigger/index")
+async def admin_trigger_index(request: Request):
+    from platysearch.auth import require_admin
+
+    if redirect := require_admin(request):
+        return redirect
+
+    from platysearch.scheduler import trigger_index
+
+    try:
+        await trigger_index()
+        msg = "Re-index started"
+        msg_type = "success"
+    except RuntimeError as e:
+        msg = str(e)
+        msg_type = "error"
+    return RedirectResponse(
+        f"/admin/dashboard?message={msg}&message_type={msg_type}",
+        status_code=303,
+    )
+
+
+@app.post("/admin/seeds/add")
+async def admin_seeds_add(request: Request, url: str = Form(...), category: str = Form("general")):
+    from platysearch.auth import require_admin
+
+    if redirect := require_admin(request):
+        return redirect
+
+    from platysearch.database import add_custom_seed
+
+    ok = await add_custom_seed(url, category)
+    if ok:
+        msg = "Seed added"
+        msg_type = "success"
+    else:
+        msg = "Seed already exists"
+        msg_type = "error"
+    return RedirectResponse(
+        f"/admin/dashboard?message={msg}&message_type={msg_type}",
+        status_code=303,
+    )
+
+
+@app.post("/admin/seeds/remove")
+async def admin_seeds_remove(request: Request, seed_id: int = Form(...)):
+    from platysearch.auth import require_admin
+
+    if redirect := require_admin(request):
+        return redirect
+
+    from platysearch.database import remove_custom_seed
+
+    await remove_custom_seed(seed_id)
+    return RedirectResponse(
+        "/admin/dashboard?message=Seed+removed&message_type=success",
+        status_code=303,
+    )
 
 
 # ── Admin / debug endpoints ─────────────────────────────────────────────────

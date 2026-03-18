@@ -5,6 +5,9 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections import deque
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -15,6 +18,50 @@ from platysearch.config import get_settings
 log = logging.getLogger(__name__)
 
 _scheduler: AsyncIOScheduler | None = None
+
+
+# ── Job history tracking ─────────────────────────────────────────────────────
+
+
+@dataclass
+class JobRun:
+    job_type: str  # "crawl", "index", "score", "full", "hourly_refresh"
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    finished_at: datetime | None = None
+    status: str = "running"  # "running", "completed", "failed"
+    pages_crawled: int = 0
+    pages_indexed: int = 0
+    pages_scored: int = 0
+    error: str = ""
+
+
+_job_history: deque[JobRun] = deque(maxlen=20)
+_current_job: JobRun | None = None
+
+
+def get_current_job() -> JobRun | None:
+    return _current_job
+
+
+def get_job_history() -> list[JobRun]:
+    return list(_job_history)
+
+
+def _start_job(job_type: str) -> JobRun:
+    global _current_job
+    job = JobRun(job_type=job_type)
+    _current_job = job
+    return job
+
+
+def _finish_job(job: JobRun, status: str = "completed", error: str = "") -> None:
+    global _current_job
+    job.finished_at = datetime.now(timezone.utc)
+    job.status = status
+    job.error = error
+    _job_history.appendleft(job)
+    if _current_job is job:
+        _current_job = None
 
 # Seeds injected every nightly run so these sites are always re-crawled.
 _NIGHTLY_SEEDS: list[str] = [
@@ -220,13 +267,18 @@ async def _nightly_update() -> None:
     """Run a crawl cycle followed by re-indexing and scoring."""
     global _nightly_running
     _nightly_running = True
+    job = _start_job("full")
     try:
-        await _nightly_update_inner()
+        await _nightly_update_inner(job)
+        _finish_job(job)
+    except Exception as exc:
+        _finish_job(job, status="failed", error=str(exc))
+        raise
     finally:
         _nightly_running = False
 
 
-async def _nightly_update_inner() -> None:
+async def _nightly_update_inner(job: JobRun) -> None:
     """Core nightly logic — crawl, index, score."""
     from platysearch.ai_detector import score_all_pages
     from platysearch.crawler import crawl
@@ -239,9 +291,9 @@ async def _nightly_update_inner() -> None:
     # ── Check if crawl is disabled ───────────────────────────────────────
     if not settings.crawl_enabled:
         log.info("Crawl is disabled (PLATY_CRAWL_ENABLED=false). Skipping to index/score.")
-        await index_all_pages()
+        job.pages_indexed = await index_all_pages()
         await compute_link_scores()
-        await score_all_pages()
+        job.pages_scored = await score_all_pages()
         _persist_db(settings.db_path)
         return
 
@@ -252,17 +304,23 @@ async def _nightly_update_inner() -> None:
         log.info("Current DB size: %.1f MB (limit: %d MB)", size_mb, max_db_mb)
         if size_mb >= max_db_mb:
             log.warning("DB size %.1f MB exceeds limit %d MB — skipping crawl.", size_mb, max_db_mb)
-            await index_all_pages()
+            job.pages_indexed = await index_all_pages()
             await compute_link_scores()
-            await score_all_pages()
+            job.pages_scored = await score_all_pages()
             return
 
     nightly_pages = settings.nightly_crawl_pages
 
     # ── Crawl with seeds — ensures all key sites are re-visited ──────────
-    log.info("Nightly crawl: fetching up to %d pages with %d seeds…", nightly_pages, len(_NIGHTLY_SEEDS))
+    # ── Merge custom seeds from DB ─────────────────────────────────────────
+    from platysearch.database import get_custom_seed_urls
+    custom = await get_custom_seed_urls()
+    all_seeds = list(_NIGHTLY_SEEDS) + [u for u in custom if u not in set(_NIGHTLY_SEEDS)]
+
+    log.info("Nightly crawl: fetching up to %d pages with %d seeds…", nightly_pages, len(all_seeds))
     try:
-        count = await crawl(seeds=list(_NIGHTLY_SEEDS), max_pages=nightly_pages)
+        count = await crawl(seeds=all_seeds, max_pages=nightly_pages)
+        job.pages_crawled += count
         log.info("Nightly crawl finished: %d pages fetched.", count)
     except Exception:
         log.exception("Nightly crawl failed.")
@@ -272,21 +330,22 @@ async def _nightly_update_inner() -> None:
     log.info("Nightly image crawl: fetching up to %d pages from %d image seeds…", image_pages, len(_IMAGE_SEEDS))
     try:
         img_count = await crawl(seeds=list(_IMAGE_SEEDS), max_pages=image_pages)
+        job.pages_crawled += img_count
         log.info("Nightly image crawl finished: %d pages fetched.", img_count)
     except Exception:
         log.exception("Nightly image crawl failed.")
 
     # ── Index & Score ────────────────────────────────────────────────────
     try:
-        await index_all_pages()
+        job.pages_indexed = await index_all_pages()
         await compute_link_scores()
         log.info("Nightly indexing complete.")
     except Exception:
         log.exception("Nightly indexing failed.")
 
     try:
-        scored = await score_all_pages()
-        log.info("Nightly scoring complete: %d pages scored.", scored)
+        job.pages_scored = await score_all_pages()
+        log.info("Nightly scoring complete: %d pages scored.", job.pages_scored)
     except Exception:
         log.exception("Nightly scoring failed.")
 
@@ -324,17 +383,20 @@ async def _hourly_refresh() -> None:
     from platysearch.ai_detector import score_all_pages
     from platysearch.indexer import compute_link_scores, index_all_pages
 
+    job = _start_job("hourly_refresh")
     log.info("Hourly refresh: re-indexing and scoring…")
     t0 = time.monotonic()
     try:
-        await index_all_pages()
+        job.pages_indexed = await index_all_pages()
         await compute_link_scores()
-        scored = await score_all_pages()
+        job.pages_scored = await score_all_pages()
         elapsed = time.monotonic() - t0
-        log.info("Hourly refresh complete: %d pages scored in %.0fs.", scored, elapsed)
+        log.info("Hourly refresh complete: %d pages scored in %.0fs.", job.pages_scored, elapsed)
         _persist_db(get_settings().db_path)
-    except Exception:
+        _finish_job(job)
+    except Exception as exc:
         log.exception("Hourly refresh failed.")
+        _finish_job(job, status="failed", error=str(exc))
 
 
 def start_scheduler() -> AsyncIOScheduler:
@@ -379,3 +441,67 @@ def stop_scheduler() -> None:
         _scheduler.shutdown(wait=False)
         _scheduler = None
         log.info("Scheduler stopped.")
+
+
+# ── Manual triggers ──────────────────────────────────────────────────────────
+
+
+async def trigger_crawl() -> JobRun:
+    """Manually trigger a full crawl + index + score cycle."""
+    if _current_job is not None:
+        raise RuntimeError(f"A job is already running: {_current_job.job_type}")
+    import asyncio
+    job_ref: list[JobRun] = []
+
+    async def _run() -> None:
+        global _nightly_running
+        _nightly_running = True
+        job = _start_job("manual_crawl")
+        job_ref.append(job)
+        try:
+            await _nightly_update_inner(job)
+            _finish_job(job)
+        except Exception as exc:
+            _finish_job(job, status="failed", error=str(exc))
+        finally:
+            _nightly_running = False
+
+    asyncio.create_task(_run())
+    # Wait briefly for the job object to be created.
+    await asyncio.sleep(0.1)
+    return job_ref[0] if job_ref else _current_job  # type: ignore[return-value]
+
+
+async def trigger_index() -> JobRun:
+    """Manually trigger an index + score cycle (no crawl)."""
+    if _current_job is not None:
+        raise RuntimeError(f"A job is already running: {_current_job.job_type}")
+    import asyncio
+
+    from platysearch.ai_detector import score_all_pages
+    from platysearch.indexer import compute_link_scores, index_all_pages
+
+    job = _start_job("manual_index")
+
+    async def _run() -> None:
+        try:
+            job.pages_indexed = await index_all_pages()
+            await compute_link_scores()
+            job.pages_scored = await score_all_pages()
+            _persist_db(get_settings().db_path)
+            _finish_job(job)
+        except Exception as exc:
+            _finish_job(job, status="failed", error=str(exc))
+
+    asyncio.create_task(_run())
+    return job
+
+
+def get_next_run_times() -> dict[str, datetime | None]:
+    """Return the next scheduled run time for each job."""
+    if _scheduler is None:
+        return {}
+    result = {}
+    for j in _scheduler.get_jobs():
+        result[j.id] = j.next_run_time
+    return result
