@@ -256,7 +256,7 @@
       No {{ tab }} results for "{{ query }}" — showing all results instead.
     </div>
     {% endif %}
-    {% if tab == "images" %}
+    {% if tab == "images" and not fallback %}
       {% if results %}
       <div class="result-count">{{ results|length }} images</div>
       <div class="image-grid">

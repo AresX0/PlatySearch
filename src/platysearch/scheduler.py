@@ -337,16 +337,15 @@ def start_scheduler() -> AsyncIOScheduler:
     settings = get_settings()
     _scheduler = AsyncIOScheduler()
 
+    import datetime
+
     _scheduler.add_job(
         _nightly_update,
-        trigger=CronTrigger(
-            hour=settings.scheduler_hour,
-            minute=settings.scheduler_minute,
-            timezone=settings.scheduler_timezone,
-        ),
+        trigger=IntervalTrigger(hours=4),
         id="nightly_update",
-        name="Nightly crawl + index + score",
+        name="Crawl + index + score (every 4h)",
         replace_existing=True,
+        next_run_time=datetime.datetime.now(datetime.timezone.utc),
     )
 
     _scheduler.add_job(
@@ -359,10 +358,7 @@ def start_scheduler() -> AsyncIOScheduler:
 
     _scheduler.start()
     log.info(
-        "Scheduler started — nightly update at %02d:%02d %s, hourly refresh enabled",
-        settings.scheduler_hour,
-        settings.scheduler_minute,
-        settings.scheduler_timezone,
+        "Scheduler started — crawl every 4 hours (first run NOW), hourly refresh enabled",
     )
     return _scheduler
 
