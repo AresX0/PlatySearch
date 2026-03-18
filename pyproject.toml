@@ -15,6 +15,7 @@ dependencies = [
     "jinja2>=3.1,<4",
     "nltk>=3.8,<4",
     "numpy>=1.26,<3",
+    "apscheduler>=3.10,<4",
 ]
 
 [project.optional-dependencies]

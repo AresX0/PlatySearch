@@ -27,6 +27,10 @@ def main() -> None:
     # score
     sub.add_parser("score", help="Run AI-content scorer on all pages")
 
+    # seedrefs
+    seedrefs_p = sub.add_parser("seedrefs", help="Extract external reference URLs from Wikipedia pages and crawl them")
+    seedrefs_p.add_argument("--max-pages", type=int, default=500, help="Max reference pages to crawl")
+
     # serve
     serve_p = sub.add_parser("serve", help="Start the search web server")
     serve_p.add_argument("--host", default=None)
@@ -68,6 +72,12 @@ def main() -> None:
 
         count = asyncio.run(score_all_pages())
         print(f"Scored {count} pages.")
+
+    elif args.command == "seedrefs":
+        from platysearch.refextractor import extract_and_crawl_refs
+
+        count = asyncio.run(extract_and_crawl_refs(max_pages=args.max_pages))
+        print(f"Crawled {count} reference pages.")
 
     elif args.command == "serve":
         import uvicorn

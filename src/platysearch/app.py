@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -10,7 +12,17 @@ from pathlib import Path
 
 from platysearch.ranker import search, SearchResult
 
-app = FastAPI(title="PlatySearch", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from platysearch.scheduler import start_scheduler, stop_scheduler
+
+    start_scheduler()
+    yield
+    stop_scheduler()
+
+
+app = FastAPI(title="PlatySearch", version="0.1.0", lifespan=lifespan)
 
 
 @app.get("/health")
