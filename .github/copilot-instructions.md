@@ -30,6 +30,7 @@ PlatySearch is an **independent search engine** — it does not wrap, proxy, or 
 - Target platform: **Azure App Service** (Linux container)
 - Custom domain: subdomain of **platysoft.com** (e.g. `search.platysoft.com`)
 - Infrastructure defined in Bicep (`infra/`)
+- **Do NOT rebuild/push the seed database** (`data/platysearch.db.gz`) during routine deploys. The production DB is persistent on Azure (`/home/data/`), updated nightly by the scheduler, and survives container restarts. Only include a new seed DB if explicitly requested by the user.
 
 ## Coding Conventions
 
