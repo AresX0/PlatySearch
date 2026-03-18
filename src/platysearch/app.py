@@ -71,9 +71,19 @@ async def api_search(
 async def home(request: Request, q: str | None = None, tab: str = "all"):
     tab = tab if tab in _VALID_TABS else "all"
     results: list[SearchResult] = []
+    fallback = False
     if q:
         results = await search(q, tab=tab)
+        if not results and tab != "all":
+            results = await search(q, tab="all")
+            fallback = True
     return templates.TemplateResponse(
         "search.html",
-        {"request": request, "query": q or "", "results": results, "tab": tab},
+        {
+            "request": request,
+            "query": q or "",
+            "results": results,
+            "tab": tab,
+            "fallback": fallback,
+        },
     )

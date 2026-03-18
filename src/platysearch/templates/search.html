@@ -251,6 +251,11 @@
 
   {% if query %}
   <div class="results">
+    {% if fallback %}
+    <div class="fallback-notice" style="text-align:center;color:var(--text-dim);margin-bottom:1.2rem;font-size:0.92rem;">
+      No {{ tab }} results for "{{ query }}" — showing all results instead.
+    </div>
+    {% endif %}
     {% if tab == "images" %}
       {% if results %}
       <div class="result-count">{{ results|length }} images</div>

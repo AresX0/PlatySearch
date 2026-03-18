@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir . && \
 
 # Include compressed seed database (decompressed at first startup).
 COPY data/platysearch.db.gz /app/seed/platysearch.db.gz
+COPY data/VERSION /app/seed/VERSION
 
 EXPOSE 8000
 
