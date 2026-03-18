@@ -29,6 +29,22 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="PlatySearch", version="0.1.0", lifespan=lifespan)
 
 
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+
+
+class _CSPMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        response.headers["Content-Security-Policy"] = (
+            "frame-ancestors 'self' https://platysoft.com"
+        )
+        return response
+
+
+app.add_middleware(_CSPMiddleware)
+
+
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}

@@ -5,8 +5,12 @@ venv/
 *.db
 **/*.db
 *.db-wal
+**/*.db-wal
 *.db-shm
+**/*.db-shm
 *.db.gz
+**/*.db.gz
+data/
 .env
 .git/
 .pytest_cache/
