@@ -41,6 +41,9 @@ class _CSPMiddleware(BaseHTTPMiddleware):
         response.headers["Content-Security-Policy"] = (
             "frame-ancestors 'self' https://platysoft.com https://*.platysoft.com"
         )
+        # Remove X-Frame-Options so the CSP frame-ancestors directive takes
+        # precedence (Azure App Service may inject SAMEORIGIN by default).
+        response.headers.pop("X-Frame-Options", None)
         return response
 
 
