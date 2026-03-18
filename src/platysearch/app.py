@@ -30,6 +30,40 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/debug/db")
+async def debug_db() -> dict:
+    """Temporary debug endpoint to inspect the deployed DB."""
+    from platysearch.database import get_db
+    from platysearch.config import get_settings
+    import os
+
+    settings = get_settings()
+    db_path = str(settings.db_path)
+    exists = os.path.exists(db_path)
+    size_mb = round(os.path.getsize(db_path) / (1024 * 1024), 1) if exists else 0
+    tables: list[str] = []
+    row_counts: dict[str, int] = {}
+    if exists:
+        db = await get_db()
+        try:
+            rows = await db.execute_fetchall(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+            tables = [r[0] for r in rows]
+            for t in tables:
+                cnt = await db.execute_fetchall(f"SELECT COUNT(*) FROM [{t}]")
+                row_counts[t] = cnt[0][0]
+        finally:
+            await db.close()
+    return {
+        "db_path": db_path,
+        "exists": exists,
+        "size_mb": size_mb,
+        "tables": tables,
+        "row_counts": row_counts,
+    }
+
+
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
