@@ -32,6 +32,40 @@ PlatySearch is an **independent search engine** — it does not wrap, proxy, or 
 - Infrastructure defined in Bicep (`infra/`)
 - **Do NOT rebuild/push the seed database** (`data/platysearch.db.gz`) during routine deploys. The production DB is persistent on Azure (`/home/data/`), updated nightly by the scheduler, and survives container restarts. Only include a new seed DB if explicitly requested by the user.
 
+### Container deploy procedure (MANDATORY)
+
+Azure App Service caches the `:latest` Docker tag digest. A plain `az webapp restart` does **NOT** re-pull the image. Every deploy **must** use a unique tag to force a pull:
+
+```powershell
+# Use deploy.ps1 (preferred):
+.\deploy.ps1
+
+# Or manually:
+$tag = Get-Date -Format "yyyyMMddHHmmss"
+az acr build --registry platysearchacr --image "platysearch:$tag" --image "platysearch:latest" --no-logs .
+az webapp config container set --name platysearch-app --resource-group platysearch-rg --container-image-name "platysearchacr.azurecr.io/platysearch:$tag"
+az webapp restart --name platysearch-app --resource-group platysearch-rg
+```
+
+**Never** rely on `az webapp restart` alone after an ACR build — it will keep running the old image.
+
+### Azure resources
+
+| Resource | Name |
+|---|---|
+| ACR | `platysearchacr` |
+| App Service | `platysearch-app` |
+| Resource Group | `platysearch-rg` |
+| Domain | `platysearch.platysoft.com` |
+
+### Admin authentication
+
+All `/admin/*` and `/debug/*` routes require login via `PLATY_ADMIN_PASSWORD` (set as an Azure App Setting). The password is checked against a cookie-based session (HMAC-signed, 24 h TTL, httponly + secure). Login page: `/admin/login`. Set the password:
+
+```powershell
+az webapp config appsettings set --name platysearch-app --resource-group platysearch-rg --settings PLATY_ADMIN_PASSWORD="<password>"
+```
+
 ## Coding Conventions
 
 - Use `ruff` for linting (`pyproject.toml` config)

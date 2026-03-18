@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin Login — PlatySearch</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2a2d3a;
+      --text: #e0e0e8;
+      --text-dim: #8888a0;
+      --accent: #6c8cff;
+      --accent-hover: #8aa4ff;
+      --red: #ff5252;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .login-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2.5rem 2rem;
+      width: 100%;
+      max-width: 380px;
+      text-align: center;
+    }
+    .login-card img {
+      width: 48px;
+      height: 48px;
+      margin-bottom: 1rem;
+    }
+    .login-card h1 {
+      font-size: 1.3rem;
+      margin-bottom: 0.4rem;
+    }
+    .login-card .subtitle {
+      color: var(--text-dim);
+      font-size: 0.85rem;
+      margin-bottom: 1.5rem;
+    }
+    .login-card input[type="password"] {
+      width: 100%;
+      padding: 0.7rem 1rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 1rem;
+      margin-bottom: 1rem;
+      outline: none;
+    }
+    .login-card input[type="password"]:focus {
+      border-color: var(--accent);
+    }
+    .login-card button {
+      width: 100%;
+      padding: 0.7rem;
+      background: var(--accent);
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .login-card button:hover {
+      background: var(--accent-hover);
+    }
+    .error {
+      background: rgba(255, 82, 82, 0.12);
+      border: 1px solid var(--red);
+      color: var(--red);
+      border-radius: 8px;
+      padding: 0.6rem;
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <img src="/static/logo.png" alt="PlatySearch">
+    <h1>Admin Login</h1>
+    <p class="subtitle">Enter the admin password to continue.</p>
+    {% if error %}
+    <div class="error">{{ error }}</div>
+    {% endif %}
+    <form method="POST" action="/admin/login">
+      <input type="hidden" name="next" value="{{ next_url }}">
+      <input type="password" name="password" placeholder="Password" autofocus required>
+      <button type="submit">Sign In</button>
+    </form>
+  </div>
+</body>
+</html>

@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     nightly_crawl_pages: int = 2000
     max_db_size_mb: int = 8000
     crawl_enabled: bool = True
+    admin_password: str = ""
 
     model_config = {"env_prefix": "PLATY_", "env_file": ".env", "extra": "ignore"}
 

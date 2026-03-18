@@ -7,7 +7,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response as FastAPIResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
@@ -125,12 +125,58 @@ async def home(request: Request, q: str | None = None, tab: str = "all"):
     )
 
 
+# ── Admin auth ───────────────────────────────────────────────────────────────
+
+
+@app.get("/admin/login", response_class=HTMLResponse)
+async def admin_login_page(request: Request, next: str = "/admin/federation"):
+    from platysearch.auth import is_authenticated
+
+    if is_authenticated(request):
+        return RedirectResponse(next, status_code=303)
+    return templates.TemplateResponse(
+        "login.html",
+        {"request": request, "error": "", "next_url": next},
+    )
+
+
+@app.post("/admin/login")
+async def admin_login(request: Request, password: str = Form(...), next: str = Form("/admin/federation")):
+    from platysearch.auth import check_password, create_session_cookie
+
+    if not check_password(password):
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": "Invalid password.", "next_url": next},
+            status_code=401,
+        )
+    cookie_val, cookie_name = create_session_cookie()
+    resp = RedirectResponse(next, status_code=303)
+    resp.set_cookie(
+        cookie_name, cookie_val,
+        httponly=True, secure=True, samesite="lax", max_age=86400,
+    )
+    return resp
+
+
+@app.get("/admin/logout")
+async def admin_logout():
+    resp = RedirectResponse("/admin/login", status_code=303)
+    resp.delete_cookie("ps_admin")
+    return resp
+
+
 # ── Admin / debug endpoints ─────────────────────────────────────────────────
 
 
 @app.get("/debug/db")
-async def debug_db() -> dict:
+async def debug_db(request: Request) -> dict:
     """Return DB stats (page counts, tables, size)."""
+    from platysearch.auth import require_admin
+
+    if redirect := require_admin(request):
+        return redirect
+
     import aiosqlite
     from platysearch.config import get_settings
 
@@ -158,7 +204,11 @@ async def debug_db() -> dict:
 
 
 @app.post("/admin/reindex")
-async def admin_reindex() -> dict:
+async def admin_reindex(request: Request) -> dict:
+    from platysearch.auth import require_admin
+
+    if redirect := require_admin(request):
+        return redirect
     """Trigger a full index + score rebuild in the background."""
     from platysearch.ai_detector import score_all_pages
     from platysearch.indexer import compute_link_scores, index_all_pages
@@ -173,7 +223,11 @@ async def admin_reindex() -> dict:
 
 
 @app.post("/admin/init-db")
-async def admin_init_db() -> dict:
+async def admin_init_db(request: Request) -> dict:
+    from platysearch.auth import require_admin
+
+    if redirect := require_admin(request):
+        return redirect
     """Ensure all tables exist (e.g. after schema changes)."""
     from platysearch.database import init_db
 
@@ -265,6 +319,11 @@ async def xrpc_search_query(
 @app.get("/admin/federation", response_class=HTMLResponse)
 async def admin_federation(request: Request, message: str = "", message_type: str = ""):
     """Render the federation admin dashboard."""
+    from platysearch.auth import require_admin
+
+    if redirect := require_admin(request):
+        return redirect
+
     from platysearch.federation import (
         describe_server, get_setting, list_peers,
     )
@@ -306,6 +365,11 @@ async def admin_federation_settings(
     accept_results: str = Form("0"),
 ):
     """Save federation settings."""
+    from platysearch.auth import require_admin
+
+    if redirect := require_admin(request):
+        return redirect
+
     from platysearch.federation import set_setting
 
     await set_setting("enabled", "1" if enabled == "1" else "0")
@@ -325,6 +389,11 @@ async def admin_federation_register(
     peer_url: str = Form(...),
 ):
     """Register with a remote peer."""
+    from platysearch.auth import require_admin
+
+    if redirect := require_admin(request):
+        return redirect
+
     from platysearch.federation import register_with_peer
 
     result = await register_with_peer(peer_url)
@@ -342,6 +411,11 @@ async def admin_federation_approve(
     peer_id: int = Form(...),
 ):
     """Approve a pending peer."""
+    from platysearch.auth import require_admin
+
+    if redirect := require_admin(request):
+        return redirect
+
     from platysearch.federation import approve_peer
 
     await approve_peer(peer_id)
@@ -357,6 +431,11 @@ async def admin_federation_block(
     peer_id: int = Form(...),
 ):
     """Block a peer."""
+    from platysearch.auth import require_admin
+
+    if redirect := require_admin(request):
+        return redirect
+
     from platysearch.federation import block_peer
 
     await block_peer(peer_id)
@@ -372,6 +451,11 @@ async def admin_federation_remove(
     peer_id: int = Form(...),
 ):
     """Remove a peer entirely."""
+    from platysearch.auth import require_admin
+
+    if redirect := require_admin(request):
+        return redirect
+
     from platysearch.federation import remove_peer
 
     await remove_peer(peer_id)
