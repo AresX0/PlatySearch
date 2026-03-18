@@ -12,12 +12,9 @@ COPY src/ src/
 RUN pip install --no-cache-dir . && \
     python -c "import nltk; nltk.download('punkt_tab', quiet=True); nltk.download('stopwords', quiet=True)"
 
-# Include compressed seed database (decompressed at first startup).
-# The seed is only needed for first-ever deploy or storage wipe.
-# For code-only deploys the persistent /home/data/ DB is reused.
-RUN mkdir -p /app/seed
-COPY data/platysearch.db.g[z] /app/seed/
-COPY data/VERSIO[N] /app/seed/
+# Seed DB is NOT included in code-only builds.
+# The persistent /home/data/ DB on Azure is reused across deploys.
+# To include a seed for first-ever deploy, temporarily remove data/ from .dockerignore.
 
 EXPOSE 8000
 
