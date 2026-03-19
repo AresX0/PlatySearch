@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -23,12 +24,14 @@ async def crawl(
     max_pages: int | None = None,
     skip_domains: set[str] | None = None,
     incremental_index_interval: int = 0,
+    max_seconds: int = 0,
 ) -> int:
     """Crawl starting from *seeds*. Returns the number of pages fetched.
 
     *skip_domains* — if given, URLs on these domains are left in the queue
     but not fetched this run (they stay queued for a later crawl).
     *incremental_index_interval* — if >0, re-index every N pages.
+    *max_seconds* — if >0, stop crawling after this many seconds.
     """
     settings = get_settings()
     max_pages = max_pages or settings.max_pages
@@ -48,6 +51,7 @@ async def crawl(
         fetched = 0
         in_flight: set[str] = set()  # URLs currently being fetched
         domain_failures: dict[str, int] = {}  # track failures per domain
+        crawl_start = time.monotonic()
         robots = RobotsChecker(settings.user_agent)
 
         import ssl as _ssl
@@ -88,6 +92,11 @@ async def crawl(
                 return (url, domain, parsed, html, status_code, content_type, depth)
 
             while fetched < max_pages:
+                # Check time budget.
+                if max_seconds > 0 and (time.monotonic() - crawl_start) >= max_seconds:
+                    log.info("Crawl time limit reached (%ds) after %d pages — stopping.", max_seconds, fetched)
+                    break
+
                 # Grab a batch of URLs from the queue.
                 batch_size = min(concurrency, max_pages - fetched)
                 rows = await db.execute_fetchall(

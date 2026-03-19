@@ -317,23 +317,34 @@ async def _nightly_update_inner(job: JobRun) -> None:
     custom = await get_custom_seed_urls()
     all_seeds = list(_NIGHTLY_SEEDS) + [u for u in custom if u not in set(_NIGHTLY_SEEDS)]
 
-    log.info("Nightly crawl: fetching up to %d pages with %d seeds…", nightly_pages, len(all_seeds))
+    # Total crawl budget: 3 hours. Main crawl gets 2.5h, image crawl gets 0.5h.
+    main_crawl_secs = 2 * 3600 + 30 * 60  # 2h30m
+    image_crawl_secs = 30 * 60  # 30m
+    crawl_t0 = time.monotonic()
+
+    log.info("Nightly crawl: fetching up to %d pages with %d seeds (max %ds)…", nightly_pages, len(all_seeds), main_crawl_secs)
     try:
-        count = await crawl(seeds=all_seeds, max_pages=nightly_pages)
+        count = await crawl(seeds=all_seeds, max_pages=nightly_pages, max_seconds=main_crawl_secs)
         job.pages_crawled += count
-        log.info("Nightly crawl finished: %d pages fetched.", count)
+        log.info("Nightly crawl finished: %d pages fetched in %.0fs.", count, time.monotonic() - crawl_t0)
     except Exception:
         log.exception("Nightly crawl failed.")
 
-    # ── Image crawl — small batch of image-rich sites (~1 hour) ──────────
+    # ── Image crawl — budget: remaining time up to 30 min ────────────────
+    elapsed = time.monotonic() - crawl_t0
+    remaining = max(0, 3 * 3600 - elapsed)
+    image_budget = min(image_crawl_secs, int(remaining))
     image_pages = max(500, nightly_pages // 4)
-    log.info("Nightly image crawl: fetching up to %d pages from %d image seeds…", image_pages, len(_IMAGE_SEEDS))
-    try:
-        img_count = await crawl(seeds=list(_IMAGE_SEEDS), max_pages=image_pages)
-        job.pages_crawled += img_count
-        log.info("Nightly image crawl finished: %d pages fetched.", img_count)
-    except Exception:
-        log.exception("Nightly image crawl failed.")
+    if image_budget > 60:  # skip if less than a minute left
+        log.info("Nightly image crawl: fetching up to %d pages from %d image seeds (max %ds)…", image_pages, len(_IMAGE_SEEDS), image_budget)
+        try:
+            img_count = await crawl(seeds=list(_IMAGE_SEEDS), max_pages=image_pages, max_seconds=image_budget)
+            job.pages_crawled += img_count
+            log.info("Nightly image crawl finished: %d pages fetched.", img_count)
+        except Exception:
+            log.exception("Nightly image crawl failed.")
+    else:
+        log.info("Skipping image crawl — no time remaining in 3h budget.")
 
     # ── Index & Score ────────────────────────────────────────────────────
     try:
