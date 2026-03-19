@@ -421,15 +421,15 @@ def start_scheduler() -> AsyncIOScheduler:
 
     _scheduler.add_job(
         _hourly_refresh,
-        trigger=IntervalTrigger(hours=1),
-        id="hourly_refresh",
-        name="Hourly re-index + score",
+        trigger=IntervalTrigger(minutes=30),
+        id="half_hourly_refresh",
+        name="Re-index + score (every 30 min)",
         replace_existing=True,
     )
 
     _scheduler.start()
     log.info(
-        "Scheduler started - crawl every 4 hours (first run NOW), hourly refresh enabled",
+        "Scheduler started - crawl every 4 hours (first run NOW), re-index every 30 min",
     )
     return _scheduler
 

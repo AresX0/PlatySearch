@@ -282,6 +282,9 @@ async def admin_seeds_add(request: Request, url: str = Form(...), category: str 
 
     ok = await add_custom_seed(url, category)
     if ok:
+        from platysearch.scheduler import _persist_db
+        from platysearch.config import get_settings
+        _persist_db(get_settings().db_path)
         msg = "Seed added"
         msg_type = "success"
     else:
@@ -303,6 +306,9 @@ async def admin_seeds_remove(request: Request, seed_id: int = Form(...)):
     from platysearch.database import remove_custom_seed
 
     await remove_custom_seed(seed_id)
+    from platysearch.scheduler import _persist_db
+    from platysearch.config import get_settings
+    _persist_db(get_settings().db_path)
     return RedirectResponse(
         "/admin/dashboard?message=Seed+removed&message_type=success",
         status_code=303,
