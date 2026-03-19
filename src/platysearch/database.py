@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 import aiosqlite
 from datetime import datetime
 from pathlib import Path
 
 from platysearch.config import get_settings
+
+log = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS pages (
@@ -221,6 +225,25 @@ async def update_job(row_id: int, *, finished_at: str | None = None,
         await db.commit()
     finally:
         await db.close()
+
+
+async def mark_stale_jobs_crashed() -> int:
+    """Mark any 'running' jobs as 'crashed' — called on startup after a restart."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "UPDATE job_history SET status = 'crashed', "
+            "finished_at = datetime('now') "
+            "WHERE status = 'running'",
+        )
+        await db.commit()
+        count = cursor.rowcount
+        if count:
+            log.info("Marked %d stale running job(s) as crashed.", count)
+        return count
+    except Exception:
+        log.exception("Failed to mark stale jobs as crashed.")
+        return 0
 
 
 async def load_job_history(limit: int = 20) -> list[dict]:

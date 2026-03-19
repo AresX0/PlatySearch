@@ -323,6 +323,9 @@ _IMAGE_SEEDS: list[str] = [
 async def _nightly_update() -> None:
     """Run a crawl cycle followed by re-indexing and scoring."""
     global _nightly_running, _cancel_requested
+    if _current_job is not None:
+        log.warning("Skipping scheduled crawl — a job is already running: %s", _current_job.job_type)
+        return
     _nightly_running = True
     _cancel_requested = False
     job = await _start_job("full")
@@ -342,6 +345,7 @@ async def _nightly_update() -> None:
 
 async def _nightly_update_inner(job: JobRun) -> None:
     """Core nightly logic — crawl, index, score."""
+    global _cancel_requested
     from platysearch.ai_detector import score_all_pages
     from platysearch.crawler import crawl
     from platysearch.database import get_db
@@ -362,71 +366,66 @@ async def _nightly_update_inner(job: JobRun) -> None:
         return
 
     if _cancel_requested:
-        return
+        log.info("Cancel requested before crawl started — skipping to index/score.")
 
     # ── Check DB size ────────────────────────────────────────────────────
     db_path = settings.db_path
-    if db_path.exists():
+    if not _cancel_requested and db_path.exists():
         size_mb = db_path.stat().st_size / (1024 * 1024)
         log.info("Current DB size: %.1f MB (limit: %d MB)", size_mb, max_db_mb)
         if size_mb >= max_db_mb:
             log.warning("DB size %.1f MB exceeds limit %d MB — skipping crawl.", size_mb, max_db_mb)
-            job.pages_indexed = await index_all_pages()
-            await compute_link_scores()
-            job.pages_scored = await score_all_pages()
-            await _update_job_progress(job)
-            return
 
-    nightly_pages = settings.nightly_crawl_pages
+    skip_crawl = _cancel_requested or (
+        db_path.exists() and db_path.stat().st_size / (1024 * 1024) >= max_db_mb
+    )
 
-    # ── Crawl with seeds — ensures all key sites are re-visited ──────────
-    # ── Merge custom seeds from DB ─────────────────────────────────────────
-    from platysearch.database import get_custom_seed_urls
-    custom = await get_custom_seed_urls()
-    all_seeds = list(_NIGHTLY_SEEDS) + [u for u in custom if u not in set(_NIGHTLY_SEEDS)]
+    if not skip_crawl:
+        nightly_pages = settings.nightly_crawl_pages
 
-    # Total crawl budget: 3 hours. Main crawl gets 2.5h, image crawl gets 0.5h.
-    main_crawl_secs = 2 * 3600 + 30 * 60  # 2h30m
-    image_crawl_secs = 30 * 60  # 30m
-    crawl_t0 = time.monotonic()
+        # ── Crawl with seeds — ensures all key sites are re-visited ──────────
+        # ── Merge custom seeds from DB ─────────────────────────────────────────
+        from platysearch.database import get_custom_seed_urls
+        custom = await get_custom_seed_urls()
+        all_seeds = list(_NIGHTLY_SEEDS) + [u for u in custom if u not in set(_NIGHTLY_SEEDS)]
 
-    log.info("Nightly crawl: fetching up to %d pages with %d seeds (max %ds)…", nightly_pages, len(all_seeds), main_crawl_secs)
-    try:
-        count = await crawl(seeds=all_seeds, max_pages=nightly_pages, max_seconds=main_crawl_secs, cancel_check=is_cancel_requested)
-        job.pages_crawled += count
-        await _update_job_progress(job)
-        log.info("Nightly crawl finished: %d pages fetched in %.0fs.", count, time.monotonic() - crawl_t0)
-    except Exception:
-        log.exception("Nightly crawl failed.")
+        # Total crawl budget: 1 hour. Main crawl gets 45min, image crawl gets 15min.
+        main_crawl_secs = 45 * 60  # 45m
+        image_crawl_secs = 15 * 60  # 15m
+        crawl_t0 = time.monotonic()
 
-    if _cancel_requested:
-        log.info("Crawl stopped by admin after %d pages.", job.pages_crawled)
-        _persist_db(settings.db_path)
-        return
-
-    # ── Image crawl — budget: remaining time up to 30 min ────────────────
-    elapsed = time.monotonic() - crawl_t0
-    remaining = max(0, 3 * 3600 - elapsed)
-    image_budget = min(image_crawl_secs, int(remaining))
-    image_pages = max(500, nightly_pages // 4)
-    if image_budget > 60:  # skip if less than a minute left
-        log.info("Nightly image crawl: fetching up to %d pages from %d image seeds (max %ds)…", image_pages, len(_IMAGE_SEEDS), image_budget)
+        log.info("Nightly crawl: fetching up to %d pages with %d seeds (max %ds)…", nightly_pages, len(all_seeds), main_crawl_secs)
         try:
-            img_count = await crawl(seeds=list(_IMAGE_SEEDS), max_pages=image_pages, max_seconds=image_budget, cancel_check=is_cancel_requested)
-            job.pages_crawled += img_count
+            count = await crawl(seeds=all_seeds, max_pages=nightly_pages, max_seconds=main_crawl_secs, cancel_check=is_cancel_requested)
+            job.pages_crawled += count
             await _update_job_progress(job)
-            log.info("Nightly image crawl finished: %d pages fetched.", img_count)
+            log.info("Nightly crawl finished: %d pages fetched in %.0fs.", count, time.monotonic() - crawl_t0)
         except Exception:
-            log.exception("Nightly image crawl failed.")
-    else:
-        log.info("Skipping image crawl — no time remaining in 3h budget.")
+            log.exception("Nightly crawl failed.")
 
-    if _cancel_requested:
-        log.info("Job stopped by admin before indexing.")
-        _persist_db(settings.db_path)
-        return
+        if _cancel_requested:
+            log.info("Crawl stopped by admin after %d pages — proceeding to index.", job.pages_crawled)
+        elif not _cancel_requested:
+            # ── Image crawl — budget: remaining time up to 15 min ────────────────
+            elapsed = time.monotonic() - crawl_t0
+            remaining = max(0, 3600 - elapsed)  # 1h total budget
+            image_budget = min(image_crawl_secs, int(remaining))
+            image_pages = max(500, nightly_pages // 4)
+            if image_budget > 60:  # skip if less than a minute left
+                log.info("Nightly image crawl: fetching up to %d pages from %d image seeds (max %ds)…", image_pages, len(_IMAGE_SEEDS), image_budget)
+                try:
+                    img_count = await crawl(seeds=list(_IMAGE_SEEDS), max_pages=image_pages, max_seconds=image_budget, cancel_check=is_cancel_requested)
+                    job.pages_crawled += img_count
+                    await _update_job_progress(job)
+                    log.info("Nightly image crawl finished: %d pages fetched.", img_count)
+                except Exception:
+                    log.exception("Nightly image crawl failed.")
+            else:
+                log.info("Skipping image crawl — no time remaining in 1h budget.")
 
-    # ── Index & Score ────────────────────────────────────────────────────
+    # ── Always index & score (even after cancel/stop) ────────────────────
+    _cancel_requested = False  # Reset so index/score runs to completion
+    log.info("Starting index + score phase…")
     try:
         job.pages_indexed = await index_all_pages()
         await compute_link_scores()
@@ -434,10 +433,6 @@ async def _nightly_update_inner(job: JobRun) -> None:
         log.info("Nightly indexing complete.")
     except Exception:
         log.exception("Nightly indexing failed.")
-
-    if _cancel_requested:
-        _persist_db(settings.db_path)
-        return
 
     try:
         job.pages_scored = await score_all_pages()

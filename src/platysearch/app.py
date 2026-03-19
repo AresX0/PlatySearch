@@ -18,11 +18,12 @@ from platysearch.ranker import search, SearchResult
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from platysearch.database import init_db
+    from platysearch.database import init_db, mark_stale_jobs_crashed
     from platysearch.federation import init_federation_db
     from platysearch.scheduler import start_scheduler, stop_scheduler
 
     await init_db()
+    await mark_stale_jobs_crashed()
     await init_federation_db()
     start_scheduler()
     yield

@@ -1,0 +1,11 @@
+<step title="Incoming Request" date="2026-03-19T06:21:03.789" instance="2e26b9" url="/dump" method="GET" type="request" pid="770,1,15" Host="platysearch-app.scm.azurewebsites.net" User-Agent="AZURECLI/2.81.0 (MSI)" Accept-Encoding="identity" Authorization="Bea..." x-ms-client-request-id="cbba8be6-235b-11f1-8853-985f41108992" X-ARR-LOG-ID="cbba8be6-235b-11f1-8853-985f41108992" CLIENT-IP="73.232.154.33:50375" X-SITE-DEPLOYMENT-ID="platysearch-app" WAS-DEFAULT-HOSTNAME="platysearch-app.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/dump" X-Client-IP="73.232.154.33" X-Client-Port="50375" >
+  <step title="Cleanup Xml Logs" date="2026-03-19T06:21:04.001" /><!-- duration: 128ms -->
+  <step title="Error occurred" date="2026-03-19T06:21:09.652" type="error" text="Unable to open /home/LogFiles/kudu/trace/2026-03-19T06-21-00_2e26b9_003_POST_api-logs-docker_pending.xml, System.IO.FileNotFoundException: Could not find file &apos;/home/LogFiles/kudu/trace/2026-03-19T06-21-00_2e26b9_003_POST_api-logs-docker_pending.xml&apos;.
+File name: &apos;/home/LogFiles/kudu/trace/2026-03-19T06-21-00_2e26b9_003_POST_api-logs-docker_pending.xml&apos;
+   at Interop.ThrowExceptionForIoErrno(ErrorInfo errorInfo, String path, Boolean isDirError)
+   at Microsoft.Win32.SafeHandles.SafeFileHandle.Open(String fullPath, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, UnixFileMode openPermissions, Int64&amp; fileLength, UnixFileMode&amp; filePermissions, Boolean failForSymlink, Boolean&amp; wasSymlink, Func`4 createOpenException)
+   at System.IO.Strategies.OSFileStreamStrategy..ctor(String path, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, Nullable`1 unixCreateMode)
+   at System.IO.FileInfo.OpenRead()
+   at Kudu.Core.Infrastructure.ZipArchiveExtensions.AddFileAsync(ZipArchive zipArchive, FileInfoBase file, ITracer tracer, String directoryNameInArchive) in /tmp/KuduLite/Kudu.Core/Infrastructure/ZipArchiveExtensions.cs:line 165" /><!-- duration: 19ms -->
+  <step title="Outgoing response" date="2026-03-19T06:21:10.276" type="response" statusCode="200" statusText="OK" /><!-- duration: 98ms -->
+</step><!-- duration: 6587ms -->
