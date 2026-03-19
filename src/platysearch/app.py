@@ -205,13 +205,14 @@ async def admin_dashboard(request: Request, message: str = "", message_type: str
             pass
 
     custom_seeds = await list_custom_seeds()
+    history = await get_job_history()
 
     return templates.TemplateResponse(
         "admin.html",
         {
             "request": request,
             "current_job": get_current_job(),
-            "history": get_job_history(),
+            "history": history,
             "next_runs": get_next_run_times(),
             "db_stats": db_stats,
             "custom_seeds": custom_seeds,
@@ -269,6 +270,82 @@ async def admin_trigger_index(request: Request):
         f"/admin/dashboard?message={msg}&message_type={msg_type}",
         status_code=303,
     )
+
+
+@app.post("/admin/trigger/stop")
+async def admin_trigger_stop(request: Request):
+    from platysearch.auth import require_admin
+
+    if redirect := require_admin(request):
+        return redirect
+
+    from platysearch.scheduler import request_stop
+
+    stopped = await request_stop()
+    if stopped:
+        msg = "Stop requested — job will finish current batch and halt"
+        msg_type = "success"
+    else:
+        msg = "No job is currently running"
+        msg_type = "error"
+    return RedirectResponse(
+        f"/admin/dashboard?message={msg}&message_type={msg_type}",
+        status_code=303,
+    )
+
+
+@app.get("/admin/api/status")
+async def admin_api_status(request: Request) -> dict:
+    """JSON endpoint for live dashboard polling."""
+    from platysearch.auth import is_authenticated
+
+    if not is_authenticated(request):
+        return {"error": "unauthorized"}
+
+    import aiosqlite
+    from platysearch.config import get_settings
+    from platysearch.scheduler import get_current_job, get_job_history, get_next_run_times
+
+    settings = get_settings()
+    db_path = Path(settings.db_path)
+
+    db_stats: dict = {"pages": 0, "postings": 0, "db_size_mb": 0, "queue": 0}
+    if db_path.exists():
+        db_stats["db_size_mb"] = round(db_path.stat().st_size / (1024 * 1024), 1)
+        try:
+            async with aiosqlite.connect(str(db_path)) as db:
+                row = await db.execute_fetchall("SELECT COUNT(*) FROM pages")
+                db_stats["pages"] = row[0][0]
+                row = await db.execute_fetchall("SELECT COUNT(*) FROM postings")
+                db_stats["postings"] = row[0][0]
+                row = await db.execute_fetchall("SELECT COUNT(*) FROM crawl_queue")
+                db_stats["queue"] = row[0][0]
+        except Exception:
+            pass
+
+    job = get_current_job()
+    current = None
+    if job:
+        current = {
+            "job_type": job.job_type,
+            "started_at": job.started_at.strftime("%Y-%m-%d %H:%M UTC"),
+            "pages_crawled": job.pages_crawled,
+            "pages_indexed": job.pages_indexed,
+            "pages_scored": job.pages_scored,
+        }
+
+    history = await get_job_history()
+
+    next_runs = {}
+    for job_id, next_time in get_next_run_times().items():
+        next_runs[job_id] = next_time.strftime("%Y-%m-%d %H:%M UTC") if next_time else None
+
+    return {
+        "current_job": current,
+        "db_stats": db_stats,
+        "history": history,
+        "next_runs": next_runs,
+    }
 
 
 @app.post("/admin/seeds/add")

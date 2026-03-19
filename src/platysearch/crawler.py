@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import typing
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -25,6 +26,7 @@ async def crawl(
     skip_domains: set[str] | None = None,
     incremental_index_interval: int = 0,
     max_seconds: int = 0,
+    cancel_check: typing.Callable[[], bool] | None = None,
 ) -> int:
     """Crawl starting from *seeds*. Returns the number of pages fetched.
 
@@ -32,6 +34,7 @@ async def crawl(
     but not fetched this run (they stay queued for a later crawl).
     *incremental_index_interval* — if >0, re-index every N pages.
     *max_seconds* — if >0, stop crawling after this many seconds.
+    *cancel_check* — if provided, called each loop iteration; return True to stop.
     """
     settings = get_settings()
     max_pages = max_pages or settings.max_pages
@@ -92,6 +95,11 @@ async def crawl(
                 return (url, domain, parsed, html, status_code, content_type, depth)
 
             while fetched < max_pages:
+                # Check cancellation.
+                if cancel_check is not None and cancel_check():
+                    log.info("Crawl cancelled by admin after %d pages.", fetched)
+                    break
+
                 # Check time budget.
                 if max_seconds > 0 and (time.monotonic() - crawl_start) >= max_seconds:
                     log.info("Crawl time limit reached (%ds) after %d pages — stopping.", max_seconds, fetched)

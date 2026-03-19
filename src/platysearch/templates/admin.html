@@ -103,6 +103,7 @@
     .badge.completed { background: rgba(74, 222, 128, 0.15); color: var(--green); }
     .badge.running { background: rgba(251, 191, 36, 0.15); color: var(--yellow); }
     .badge.failed { background: rgba(255, 82, 82, 0.15); color: var(--red); }
+    .badge.cancelled { background: rgba(255, 165, 0, 0.15); color: #ffa500; }
 
     /* ── Seeds ─────────────────────────────── */
     .seed-form { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
@@ -163,37 +164,40 @@
 
     <!-- ── Status banner ────────────────────── -->
     {% if current_job %}
-    <div class="status-banner running">
+    <div class="status-banner running" id="status-banner">
       <div class="status-dot"></div>
-      <div>
+      <div style="flex:1">
         <strong>{{ current_job.job_type }}</strong> running since {{ current_job.started_at.strftime('%Y-%m-%d %H:%M UTC') }}
         {% if current_job.pages_crawled %} · {{ current_job.pages_crawled }} pages crawled{% endif %}
         {% if current_job.pages_indexed %} · {{ current_job.pages_indexed }} indexed{% endif %}
       </div>
+      <form method="POST" action="/admin/trigger/stop" style="display:inline">
+        <button class="btn btn-danger" type="submit" title="Stop the running job">■ Stop</button>
+      </form>
     </div>
     {% else %}
-    <div class="status-banner idle">
+    <div class="status-banner idle" id="status-banner">
       <div class="status-dot"></div>
       <div><strong>Idle</strong> — no jobs running</div>
     </div>
     {% endif %}
 
     <!-- ── Stats ────────────────────────────── -->
-    <div class="stats">
+    <div class="stats" id="stats-row">
       <div class="stat-card">
-        <div class="value">{{ db_stats.pages | default(0) | string }}</div>
+        <div class="value" id="stat-pages">{{ db_stats.pages | default(0) | string }}</div>
         <div class="label">Pages Crawled</div>
       </div>
       <div class="stat-card">
-        <div class="value">{{ db_stats.postings | default(0) | string }}</div>
+        <div class="value" id="stat-postings">{{ db_stats.postings | default(0) | string }}</div>
         <div class="label">Index Postings</div>
       </div>
       <div class="stat-card">
-        <div class="value">{{ "%.1f" | format(db_stats.db_size_mb | default(0)) }} MB</div>
+        <div class="value" id="stat-dbsize">{{ "%.1f" | format(db_stats.db_size_mb | default(0)) }} MB</div>
         <div class="label">Database Size</div>
       </div>
       <div class="stat-card">
-        <div class="value">{{ db_stats.queue | default(0) | string }}</div>
+        <div class="value" id="stat-queue">{{ db_stats.queue | default(0) | string }}</div>
         <div class="label">Crawl Queue</div>
       </div>
       <div class="stat-card">
@@ -225,7 +229,7 @@
     </div>
 
     <!-- ── Job History ──────────────────────── -->
-    <div class="card">
+    <div class="card" id="history-card">
       <h2>Job History (last {{ history | length }})</h2>
       {% if history %}
       <table>
@@ -240,28 +244,22 @@
             <th>Scored</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="history-body">
           {% for job in history %}
           <tr>
-            <td>{{ job.job_type }}</td>
-            <td><span class="badge {{ job.status }}">{{ job.status }}</span></td>
-            <td class="meta">{{ job.started_at.strftime('%Y-%m-%d %H:%M') }}</td>
-            <td class="meta">
-              {% if job.finished_at %}
-                {{ ((job.finished_at - job.started_at).total_seconds() // 60) | int }}m {{ ((job.finished_at - job.started_at).total_seconds() % 60) | int }}s
-              {% else %}
-                —
-              {% endif %}
-            </td>
-            <td>{{ job.pages_crawled or '—' }}</td>
-            <td>{{ job.pages_indexed or '—' }}</td>
-            <td>{{ job.pages_scored or '—' }}</td>
+            <td>{{ job['job_type'] }}</td>
+            <td><span class="badge {{ job['status'] }}">{{ job['status'] }}</span></td>
+            <td class="meta">{{ job['started_at'][:16] | replace('T', ' ') }}</td>
+            <td class="meta">{{ job['duration'] or '—' }}</td>
+            <td>{{ job['pages_crawled'] or '—' }}</td>
+            <td>{{ job['pages_indexed'] or '—' }}</td>
+            <td>{{ job['pages_scored'] or '—' }}</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
       {% else %}
-      <p class="meta">No jobs have run yet since the last restart.</p>
+      <p class="meta">No jobs have run yet.</p>
       {% endif %}
     </div>
 
@@ -300,5 +298,111 @@
     </div>
 
   </div>
+
+  <script>
+  (function() {
+    const POLL_INTERVAL = 8000;
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    async function refresh() {
+      let data;
+      try {
+        const resp = await fetch('/admin/api/status');
+        if (!resp.ok) return;
+        data = await resp.json();
+      } catch { return; }
+
+      // ── Status banner ──
+      const banner = document.getElementById('status-banner');
+      if (banner) {
+        if (data.current_job) {
+          const cj = data.current_job;
+          let info = '<strong>' + esc(cj.job_type) + '</strong> running since ' + esc(cj.started_at);
+          if (cj.pages_crawled) info += ' · ' + cj.pages_crawled + ' pages crawled';
+          if (cj.pages_indexed) info += ' · ' + cj.pages_indexed + ' indexed';
+          banner.className = 'status-banner running';
+          banner.innerHTML =
+            '<div class="status-dot"></div>' +
+            '<div style="flex:1">' + info + '</div>' +
+            '<form method="POST" action="/admin/trigger/stop" style="display:inline">' +
+              '<button class="btn btn-danger" type="submit" title="Stop the running job">■ Stop</button>' +
+            '</form>';
+        } else {
+          banner.className = 'status-banner idle';
+          banner.innerHTML =
+            '<div class="status-dot"></div>' +
+            '<div><strong>Idle</strong> — no jobs running</div>';
+        }
+      }
+
+      // ── Stats ──
+      const s = data.db_stats || {};
+      const el = (id) => document.getElementById(id);
+      if (el('stat-pages')) el('stat-pages').textContent = s.pages ?? 0;
+      if (el('stat-postings')) el('stat-postings').textContent = s.postings ?? 0;
+      if (el('stat-dbsize')) el('stat-dbsize').textContent = (s.db_size_mb ?? 0).toFixed(1) + ' MB';
+      if (el('stat-queue')) el('stat-queue').textContent = s.queue ?? 0;
+
+      // ── Action buttons (disable while running) ──
+      document.querySelectorAll('.actions button[type="submit"]').forEach(btn => {
+        btn.disabled = !!data.current_job;
+      });
+
+      // ── Job History ──
+      const tbody = document.getElementById('history-body');
+      const card = document.getElementById('history-card');
+      if (card && data.history) {
+        const hist = data.history;
+        const h2 = card.querySelector('h2');
+        if (h2) h2.textContent = 'Job History (last ' + hist.length + ')';
+        if (hist.length === 0) {
+          if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="meta">No jobs have run yet.</td></tr>';
+        } else {
+          let rows = '';
+          for (const j of hist) {
+            const started = (j.started_at || '').substring(0, 16).replace('T', ' ');
+            rows += '<tr>' +
+              '<td>' + esc(j.job_type) + '</td>' +
+              '<td><span class="badge ' + esc(j.status) + '">' + esc(j.status) + '</span></td>' +
+              '<td class="meta">' + esc(started) + '</td>' +
+              '<td class="meta">' + esc(j.duration || '—') + '</td>' +
+              '<td>' + (j.pages_crawled || '—') + '</td>' +
+              '<td>' + (j.pages_indexed || '—') + '</td>' +
+              '<td>' + (j.pages_scored || '—') + '</td>' +
+            '</tr>';
+          }
+          if (tbody) {
+            tbody.innerHTML = rows;
+          } else {
+            // Table didn't exist on initial render (was "No jobs yet"), rebuild it.
+            card.innerHTML =
+              '<h2>Job History (last ' + hist.length + ')</h2>' +
+              '<table><thead><tr>' +
+                '<th>Type</th><th>Status</th><th>Started</th><th>Duration</th>' +
+                '<th>Crawled</th><th>Indexed</th><th>Scored</th>' +
+              '</tr></thead><tbody id="history-body">' + rows + '</tbody></table>';
+          }
+        }
+      }
+
+      // ── Next runs ──
+      const metaDiv = document.querySelector('.actions + .meta');
+      if (metaDiv && data.next_runs) {
+        let html = '';
+        for (const [id, t] of Object.entries(data.next_runs)) {
+          html += '<strong>' + esc(id) + '</strong>: next run ' + esc(t || 'N/A') + '<br>';
+        }
+        metaDiv.innerHTML = html;
+      }
+    }
+
+    setInterval(refresh, POLL_INTERVAL);
+  })();
+  </script>
 </body>
 </html>

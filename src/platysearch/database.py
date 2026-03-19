@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import aiosqlite
+from datetime import datetime
 from pathlib import Path
 
 from platysearch.config import get_settings
@@ -80,6 +81,18 @@ CREATE TABLE IF NOT EXISTS custom_seeds (
     category TEXT    DEFAULT 'general',
     added_at TEXT    DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS job_history (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_type       TEXT    NOT NULL,
+    started_at     TEXT    NOT NULL,
+    finished_at    TEXT,
+    status         TEXT    NOT NULL DEFAULT 'running',
+    pages_crawled  INTEGER DEFAULT 0,
+    pages_indexed  INTEGER DEFAULT 0,
+    pages_scored   INTEGER DEFAULT 0,
+    error          TEXT    DEFAULT ''
+);
 """
 
 
@@ -145,5 +158,96 @@ async def get_custom_seed_urls() -> list[str]:
     try:
         rows = await db.execute_fetchall("SELECT url FROM custom_seeds")
         return [r[0] for r in rows]
+    finally:
+        await db.close()
+
+
+# ── Job history helpers ──────────────────────────────────────────────────────
+
+
+async def save_job(job_type: str, started_at: str, finished_at: str | None,
+                   status: str, pages_crawled: int, pages_indexed: int,
+                   pages_scored: int, error: str) -> int:
+    """Insert a job record and return its row id."""
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "INSERT INTO job_history (job_type, started_at, finished_at, status, "
+            "pages_crawled, pages_indexed, pages_scored, error) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (job_type, started_at, finished_at, status, pages_crawled,
+             pages_indexed, pages_scored, error),
+        )
+        await db.commit()
+        return cur.lastrowid  # type: ignore[return-value]
+    finally:
+        await db.close()
+
+
+async def update_job(row_id: int, *, finished_at: str | None = None,
+                     status: str | None = None, pages_crawled: int | None = None,
+                     pages_indexed: int | None = None, pages_scored: int | None = None,
+                     error: str | None = None) -> None:
+    """Update selected fields of an existing job record."""
+    parts: list[str] = []
+    vals: list[object] = []
+    if finished_at is not None:
+        parts.append("finished_at = ?")
+        vals.append(finished_at)
+    if status is not None:
+        parts.append("status = ?")
+        vals.append(status)
+    if pages_crawled is not None:
+        parts.append("pages_crawled = ?")
+        vals.append(pages_crawled)
+    if pages_indexed is not None:
+        parts.append("pages_indexed = ?")
+        vals.append(pages_indexed)
+    if pages_scored is not None:
+        parts.append("pages_scored = ?")
+        vals.append(pages_scored)
+    if error is not None:
+        parts.append("error = ?")
+        vals.append(error)
+    if not parts:
+        return
+    vals.append(row_id)
+    db = await get_db()
+    try:
+        await db.execute(
+            f"UPDATE job_history SET {', '.join(parts)} WHERE id = ?",  # noqa: S608
+            tuple(vals),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def load_job_history(limit: int = 20) -> list[dict]:
+    """Return the most recent job records, newest first."""
+    db = await get_db()
+    try:
+        rows = await db.execute_fetchall(
+            "SELECT id, job_type, started_at, finished_at, status, "
+            "pages_crawled, pages_indexed, pages_scored, error "
+            "FROM job_history ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        result = []
+        for r in rows:
+            d = dict(r)
+            # Compute human-readable duration string.
+            if d.get("finished_at") and d.get("started_at"):
+                try:
+                    t0 = datetime.fromisoformat(d["started_at"])
+                    t1 = datetime.fromisoformat(d["finished_at"])
+                    secs = int((t1 - t0).total_seconds())
+                    d["duration"] = f"{secs // 60}m {secs % 60}s"
+                except (ValueError, TypeError):
+                    d["duration"] = ""
+            else:
+                d["duration"] = ""
+            result.append(d)
+        return result
     finally:
         await db.close()
