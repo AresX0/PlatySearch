@@ -159,8 +159,9 @@
     </nav>
 
     {% if message %}
-    <div class="message {{ message_type }}">{{ message }}</div>
+    <div class="message {{ message_type }}" id="toast">{{ message }}</div>
     {% endif %}
+    <div class="message success" id="toast" style="display:none"></div>
 
     <!-- ── Status banner ────────────────────── -->
     {% if current_job %}
@@ -171,9 +172,7 @@
         {% if current_job.pages_crawled %} · {{ current_job.pages_crawled }} pages crawled{% endif %}
         {% if current_job.pages_indexed %} · {{ current_job.pages_indexed }} indexed{% endif %}
       </div>
-      <form method="POST" action="/admin/trigger/stop" style="display:inline">
-        <button class="btn btn-danger" type="submit" title="Stop the running job">■ Stop</button>
-      </form>
+      <button class="btn btn-danger" onclick="triggerAction('/admin/trigger/stop', this)" title="Stop the running job">■ Stop</button>
     </div>
     {% else %}
     <div class="status-banner idle" id="status-banner">
@@ -210,16 +209,12 @@
     <div class="card">
       <h2>Manual Actions</h2>
       <div class="actions">
-        <form method="POST" action="/admin/trigger/crawl" style="display:inline">
-          <button class="btn btn-green" type="submit" {% if current_job %}disabled title="A job is already running"{% endif %}>
-            ▶ Start Crawl + Index
-          </button>
-        </form>
-        <form method="POST" action="/admin/trigger/index" style="display:inline">
-          <button class="btn btn-primary" type="submit" {% if current_job %}disabled title="A job is already running"{% endif %}>
-            ▶ Re-Index Only
-          </button>
-        </form>
+        <button class="btn btn-green" onclick="triggerAction('/admin/trigger/crawl', this)" {% if current_job %}disabled title="A job is already running"{% endif %}>
+          ▶ Start Crawl + Index
+        </button>
+        <button class="btn btn-primary" onclick="triggerAction('/admin/trigger/index', this)" {% if current_job %}disabled title="A job is already running"{% endif %}>
+          ▶ Re-Index Only
+        </button>
       </div>
       <div class="meta">
         {% for job_id, next_time in next_runs.items() %}
@@ -300,6 +295,27 @@
   </div>
 
   <script>
+  function showToast(msg, ok) {
+    const t = document.getElementById('toast');
+    if (!t) return;
+    t.textContent = msg;
+    t.className = 'message ' + (ok ? 'success' : 'error');
+    t.style.display = '';
+    clearTimeout(t._tid);
+    t._tid = setTimeout(() => { t.style.display = 'none'; }, 5000);
+  }
+
+  async function triggerAction(url, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      const resp = await fetch(url, {method: 'POST'});
+      const data = await resp.json();
+      showToast(data.message, data.ok);
+    } catch (e) {
+      showToast('Request failed: ' + e.message, false);
+    }
+  }
+
   (function() {
     const POLL_INTERVAL = 8000;
 
@@ -329,9 +345,7 @@
           banner.innerHTML =
             '<div class="status-dot"></div>' +
             '<div style="flex:1">' + info + '</div>' +
-            '<form method="POST" action="/admin/trigger/stop" style="display:inline">' +
-              '<button class="btn btn-danger" type="submit" title="Stop the running job">■ Stop</button>' +
-            '</form>';
+            '<button class="btn btn-danger" onclick="triggerAction(\'/admin/trigger/stop\', this)" title="Stop the running job">■ Stop</button>';
         } else {
           banner.className = 'status-banner idle';
           banner.innerHTML =

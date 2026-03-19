@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import os
-from contextlib import asynccontextmanager
+import osimport timefrom contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response as FastAPIResponse
@@ -46,6 +45,41 @@ class _CSPMiddleware(BaseHTTPMiddleware):
         if "X-Frame-Options" in response.headers:
             del response.headers["X-Frame-Options"]
         return response
+
+
+# ── Cached DB stats (avoid repeated COUNT(*) on multi-million row tables) ──
+_stats_cache: dict = {}
+_stats_cache_time: float = 0
+_STATS_TTL = 30  # seconds
+
+
+async def _get_db_stats() -> dict:
+    global _stats_cache, _stats_cache_time
+    now = time.monotonic()
+    if _stats_cache and (now - _stats_cache_time) < _STATS_TTL:
+        return _stats_cache
+
+    import aiosqlite
+    from platysearch.config import get_settings
+
+    settings = get_settings()
+    db_path = Path(settings.db_path)
+    stats: dict = {"pages": 0, "postings": 0, "db_size_mb": 0, "queue": 0}
+    if db_path.exists():
+        stats["db_size_mb"] = round(db_path.stat().st_size / (1024 * 1024), 1)
+        try:
+            async with aiosqlite.connect(str(db_path)) as db:
+                row = await db.execute_fetchall("SELECT COUNT(*) FROM pages")
+                stats["pages"] = row[0][0]
+                row = await db.execute_fetchall("SELECT COUNT(*) FROM postings")
+                stats["postings"] = row[0][0]
+                row = await db.execute_fetchall("SELECT COUNT(*) FROM crawl_queue")
+                stats["queue"] = row[0][0]
+        except Exception:
+            pass
+    _stats_cache = stats
+    _stats_cache_time = now
+    return stats
 
 
 app.add_middleware(_CSPMiddleware)
@@ -176,8 +210,6 @@ async def admin_dashboard(request: Request, message: str = "", message_type: str
     if redirect := require_admin(request):
         return redirect
 
-    import aiosqlite
-    from platysearch.config import get_settings
     from platysearch.database import list_custom_seeds
     from platysearch.scheduler import (
         _NIGHTLY_SEEDS,
@@ -186,23 +218,7 @@ async def admin_dashboard(request: Request, message: str = "", message_type: str
         get_next_run_times,
     )
 
-    settings = get_settings()
-    db_path = Path(settings.db_path)
-
-    # Gather DB stats
-    db_stats: dict = {"pages": 0, "postings": 0, "db_size_mb": 0, "queue": 0}
-    if db_path.exists():
-        db_stats["db_size_mb"] = db_path.stat().st_size / (1024 * 1024)
-        try:
-            async with aiosqlite.connect(str(db_path)) as db:
-                row = await db.execute_fetchall("SELECT COUNT(*) FROM pages")
-                db_stats["pages"] = row[0][0]
-                row = await db.execute_fetchall("SELECT COUNT(*) FROM postings")
-                db_stats["postings"] = row[0][0]
-                row = await db.execute_fetchall("SELECT COUNT(*) FROM crawl_queue")
-                db_stats["queue"] = row[0][0]
-        except Exception:
-            pass
+    db_stats = await _get_db_stats()
 
     custom_seeds = await list_custom_seeds()
     history = await get_job_history()
@@ -239,15 +255,9 @@ async def admin_trigger_crawl(request: Request):
 
     try:
         await trigger_crawl()
-        msg = "Crawl+index started"
-        msg_type = "success"
+        return {"ok": True, "message": "Crawl+index started"}
     except RuntimeError as e:
-        msg = str(e)
-        msg_type = "error"
-    return RedirectResponse(
-        f"/admin/dashboard?message={msg}&message_type={msg_type}",
-        status_code=303,
-    )
+        return {"ok": False, "message": str(e)}
 
 
 @app.post("/admin/trigger/index")
@@ -261,15 +271,9 @@ async def admin_trigger_index(request: Request):
 
     try:
         await trigger_index()
-        msg = "Re-index started"
-        msg_type = "success"
+        return {"ok": True, "message": "Re-index started"}
     except RuntimeError as e:
-        msg = str(e)
-        msg_type = "error"
-    return RedirectResponse(
-        f"/admin/dashboard?message={msg}&message_type={msg_type}",
-        status_code=303,
-    )
+        return {"ok": False, "message": str(e)}
 
 
 @app.post("/admin/trigger/stop")
@@ -283,15 +287,8 @@ async def admin_trigger_stop(request: Request):
 
     stopped = await request_stop()
     if stopped:
-        msg = "Stop requested — job will finish current batch and halt"
-        msg_type = "success"
-    else:
-        msg = "No job is currently running"
-        msg_type = "error"
-    return RedirectResponse(
-        f"/admin/dashboard?message={msg}&message_type={msg_type}",
-        status_code=303,
-    )
+        return {"ok": True, "message": "Stop requested \u2014 job will finish current batch and halt"}
+    return {"ok": False, "message": "No job is currently running"}
 
 
 @app.get("/admin/api/status")
@@ -302,26 +299,9 @@ async def admin_api_status(request: Request) -> dict:
     if not is_authenticated(request):
         return {"error": "unauthorized"}
 
-    import aiosqlite
-    from platysearch.config import get_settings
     from platysearch.scheduler import get_current_job, get_job_history, get_next_run_times
 
-    settings = get_settings()
-    db_path = Path(settings.db_path)
-
-    db_stats: dict = {"pages": 0, "postings": 0, "db_size_mb": 0, "queue": 0}
-    if db_path.exists():
-        db_stats["db_size_mb"] = round(db_path.stat().st_size / (1024 * 1024), 1)
-        try:
-            async with aiosqlite.connect(str(db_path)) as db:
-                row = await db.execute_fetchall("SELECT COUNT(*) FROM pages")
-                db_stats["pages"] = row[0][0]
-                row = await db.execute_fetchall("SELECT COUNT(*) FROM postings")
-                db_stats["postings"] = row[0][0]
-                row = await db.execute_fetchall("SELECT COUNT(*) FROM crawl_queue")
-                db_stats["queue"] = row[0][0]
-        except Exception:
-            pass
+    db_stats = await _get_db_stats()
 
     job = get_current_job()
     current = None
