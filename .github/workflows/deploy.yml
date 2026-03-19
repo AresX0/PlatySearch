@@ -1,0 +1,69 @@
+name: Build & Deploy to Azure
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  REGISTRY: platysearchacr
+  IMAGE: platysearch
+  APP_NAME: platysearch-app
+  RESOURCE_GROUP: platysearch-rg
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate unique tag
+        id: tag
+        run: echo "value=$(date +%Y%m%d%H%M%S)" >> "$GITHUB_OUTPUT"
+
+      - name: Login to ACR
+        uses: azure/docker-login@v2
+        with:
+          login-server: ${{ env.REGISTRY }}.azurecr.io
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push image
+        run: |
+          docker build \
+            -t ${{ env.REGISTRY }}.azurecr.io/${{ env.IMAGE }}:${{ steps.tag.outputs.value }} \
+            -t ${{ env.REGISTRY }}.azurecr.io/${{ env.IMAGE }}:latest \
+            .
+          docker push ${{ env.REGISTRY }}.azurecr.io/${{ env.IMAGE }}:${{ steps.tag.outputs.value }}
+          docker push ${{ env.REGISTRY }}.azurecr.io/${{ env.IMAGE }}:latest
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy to App Service
+        run: |
+          az webapp config container set \
+            --name ${{ env.APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --container-image-name ${{ env.REGISTRY }}.azurecr.io/${{ env.IMAGE }}:${{ steps.tag.outputs.value }}
+
+          az webapp restart \
+            --name ${{ env.APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }}
+
+      - name: Wait for healthy response
+        run: |
+          for i in $(seq 1 15); do
+            if curl -sf --max-time 10 https://platysearch.platysoft.com/health > /dev/null 2>&1; then
+              echo "✅ Healthy (attempt $i)"
+              exit 0
+            fi
+            echo "⏳ attempt $i/15 — not ready yet..."
+            sleep 10
+          done
+          echo "⚠️ App did not become healthy after 15 attempts"
+          exit 1
