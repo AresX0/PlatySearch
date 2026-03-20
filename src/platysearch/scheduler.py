@@ -344,11 +344,10 @@ async def _nightly_update() -> None:
 
 
 async def _nightly_update_inner(job: JobRun) -> None:
-    """Core nightly logic — crawl, index, score."""
+    """Core nightly logic — crawl (1 h hard cap), then index + score."""
     global _cancel_requested
     from platysearch.ai_detector import score_all_pages
     from platysearch.crawler import crawl
-    from platysearch.database import get_db
     from platysearch.indexer import compute_link_scores, index_all_pages
 
     settings = get_settings()
@@ -383,45 +382,42 @@ async def _nightly_update_inner(job: JobRun) -> None:
     if not skip_crawl:
         nightly_pages = settings.nightly_crawl_pages
 
-        # ── Crawl with seeds — ensures all key sites are re-visited ──────────
-        # ── Merge custom seeds from DB ─────────────────────────────────────────
+        # ── Merge all seeds (nightly + image + custom) into one crawl ────
         from platysearch.database import get_custom_seed_urls
         custom = await get_custom_seed_urls()
-        all_seeds = list(_NIGHTLY_SEEDS) + [u for u in custom if u not in set(_NIGHTLY_SEEDS)]
+        nightly_set = set(_NIGHTLY_SEEDS)
+        all_seeds = (
+            list(_NIGHTLY_SEEDS)
+            + list(_IMAGE_SEEDS)
+            + [u for u in custom if u not in nightly_set]
+        )
 
-        # Total crawl budget: 1 hour. Main crawl gets 45min, image crawl gets 15min.
-        main_crawl_secs = 45 * 60  # 45m
-        image_crawl_secs = 15 * 60  # 15m
+        # Hard cap: 1 hour for the entire crawl phase.
+        crawl_budget_secs = 60 * 60  # 1 h
         crawl_t0 = time.monotonic()
 
-        log.info("Nightly crawl: fetching up to %d pages with %d seeds (max %ds)…", nightly_pages, len(all_seeds), main_crawl_secs)
+        log.info(
+            "Crawl: fetching up to %d pages with %d seeds (max %ds)…",
+            nightly_pages, len(all_seeds), crawl_budget_secs,
+        )
         try:
-            count = await crawl(seeds=all_seeds, max_pages=nightly_pages, max_seconds=main_crawl_secs, cancel_check=is_cancel_requested)
-            job.pages_crawled += count
+            count = await crawl(
+                seeds=all_seeds,
+                max_pages=nightly_pages,
+                max_seconds=crawl_budget_secs,
+                cancel_check=is_cancel_requested,
+            )
+            job.pages_crawled = count
             await _update_job_progress(job)
-            log.info("Nightly crawl finished: %d pages fetched in %.0fs.", count, time.monotonic() - crawl_t0)
+            log.info(
+                "Crawl finished: %d pages fetched in %.0fs.",
+                count, time.monotonic() - crawl_t0,
+            )
         except Exception:
-            log.exception("Nightly crawl failed.")
+            log.exception("Crawl failed.")
 
         if _cancel_requested:
             log.info("Crawl stopped by admin after %d pages — proceeding to index.", job.pages_crawled)
-        elif not _cancel_requested:
-            # ── Image crawl — budget: remaining time up to 15 min ────────────────
-            elapsed = time.monotonic() - crawl_t0
-            remaining = max(0, 3600 - elapsed)  # 1h total budget
-            image_budget = min(image_crawl_secs, int(remaining))
-            image_pages = max(500, nightly_pages // 4)
-            if image_budget > 60:  # skip if less than a minute left
-                log.info("Nightly image crawl: fetching up to %d pages from %d image seeds (max %ds)…", image_pages, len(_IMAGE_SEEDS), image_budget)
-                try:
-                    img_count = await crawl(seeds=list(_IMAGE_SEEDS), max_pages=image_pages, max_seconds=image_budget, cancel_check=is_cancel_requested)
-                    job.pages_crawled += img_count
-                    await _update_job_progress(job)
-                    log.info("Nightly image crawl finished: %d pages fetched.", img_count)
-                except Exception:
-                    log.exception("Nightly image crawl failed.")
-            else:
-                log.info("Skipping image crawl — no time remaining in 1h budget.")
 
     # ── Always index & score (even after cancel/stop) ────────────────────
     _cancel_requested = False  # Reset so index/score runs to completion
@@ -430,16 +426,16 @@ async def _nightly_update_inner(job: JobRun) -> None:
         job.pages_indexed = await index_all_pages()
         await compute_link_scores()
         await _update_job_progress(job)
-        log.info("Nightly indexing complete.")
+        log.info("Indexing complete: %d pages indexed.", job.pages_indexed)
     except Exception:
-        log.exception("Nightly indexing failed.")
+        log.exception("Indexing failed.")
 
     try:
         job.pages_scored = await score_all_pages()
         await _update_job_progress(job)
-        log.info("Nightly scoring complete: %d pages scored.", job.pages_scored)
+        log.info("Scoring complete: %d pages scored.", job.pages_scored)
     except Exception:
-        log.exception("Nightly scoring failed.")
+        log.exception("Scoring failed.")
 
     # ── Persist DB to Azure /home/data so it survives container restarts ─
     _persist_db(settings.db_path)

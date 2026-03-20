@@ -70,14 +70,19 @@ async def _get_db_stats() -> dict:
     stats: dict = {"pages": 0, "postings": 0, "db_size_mb": 0, "queue": 0}
     if db_path.exists():
         stats["db_size_mb"] = round(db_path.stat().st_size / (1024 * 1024), 1)
-        try:
+
+        async def _count(table: str) -> int:
             async with aiosqlite.connect(str(db_path)) as db:
-                row = await db.execute_fetchall("SELECT COUNT(*) FROM pages")
-                stats["pages"] = row[0][0]
-                row = await db.execute_fetchall("SELECT COUNT(*) FROM postings")
-                stats["postings"] = row[0][0]
-                row = await db.execute_fetchall("SELECT COUNT(*) FROM crawl_queue")
-                stats["queue"] = row[0][0]
+                row = await db.execute_fetchall(f"SELECT COUNT(*) FROM {table}")  # noqa: S608 — table name is hardcoded below
+                return row[0][0]
+
+        try:
+            pages, postings, queue = await asyncio.gather(
+                _count("pages"), _count("postings"), _count("crawl_queue"),
+            )
+            stats["pages"] = pages
+            stats["postings"] = postings
+            stats["queue"] = queue
         except Exception:
             pass
     _stats_cache = stats
