@@ -157,23 +157,32 @@ def compute_ai_score(text: str) -> float:
 
 async def score_all_pages() -> int:
     """Compute and store AI scores for every page in the database."""
+    _BATCH = 500
     db = await get_db()
     try:
-        rows = await db.execute_fetchall("SELECT id, body FROM pages WHERE body IS NOT NULL")
         count = 0
-        for page_id, body in rows:
-            if not body or len(body) < 100:
-                continue
-            ai = compute_ai_score(body)
-            await db.execute(
-                """INSERT INTO page_scores (page_id, ai_score)
-                   VALUES (?, ?)
-                   ON CONFLICT(page_id)
-                   DO UPDATE SET ai_score = excluded.ai_score""",
-                (page_id, ai),
+        last_id = 0
+        while True:
+            rows = await db.execute_fetchall(
+                "SELECT id, body FROM pages WHERE body IS NOT NULL AND id > ? ORDER BY id LIMIT ?",
+                (last_id, _BATCH),
             )
-            count += 1
-        await db.commit()
+            if not rows:
+                break
+            for page_id, body in rows:
+                last_id = page_id
+                if not body or len(body) < 100:
+                    continue
+                ai = compute_ai_score(body)
+                await db.execute(
+                    """INSERT INTO page_scores (page_id, ai_score)
+                       VALUES (?, ?)
+                       ON CONFLICT(page_id)
+                       DO UPDATE SET ai_score = excluded.ai_score""",
+                    (page_id, ai),
+                )
+                count += 1
+            await db.commit()
         log.info("Scored %d pages for AI content.", count)
         return count
     finally:

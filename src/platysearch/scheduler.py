@@ -413,8 +413,13 @@ async def _nightly_update_inner(job: JobRun) -> None:
                 "Crawl finished: %d pages fetched in %.0fs.",
                 count, time.monotonic() - crawl_t0,
             )
-        except Exception:
-            log.exception("Crawl failed.")
+        except Exception as exc:
+            log.exception("Crawl failed: %s", exc)
+            job.error = f"Crawl error: {exc}"
+            await _update_job_progress(job)
+
+        # Persist after crawl so progress survives a crash during index/score.
+        _persist_db(settings.db_path)
 
         if _cancel_requested:
             log.info("Crawl stopped by admin after %d pages — proceeding to index.", job.pages_crawled)

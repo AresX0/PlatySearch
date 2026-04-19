@@ -44,61 +44,104 @@ def tokenize(text: str) -> list[str]:
 
 
 async def index_all_pages() -> int:
-    """(Re-)index every page currently stored. Returns number of pages indexed."""
+    """(Re-)index every page currently stored. Returns number of pages indexed.
+
+    Uses batched processing to stay within tight memory limits (e.g. 1.75 GB).
+    """
+    _BATCH = 500
     db = await get_db()
     try:
-        rows = await db.execute_fetchall("SELECT id, title, body FROM pages")
-        if not rows:
+        cursor = await db.execute("SELECT COUNT(*) FROM pages")
+        row = await cursor.fetchone()
+        total_docs = row[0] if row else 0
+        if total_docs == 0:
             log.info("No pages to index.")
             return 0
 
-        total_docs = len(rows)
-        log.info("Indexing %d pages…", total_docs)
+        log.info("Indexing %d pages (batched)…", total_docs)
 
-        # Compute term frequencies per document.
-        doc_term_freqs: dict[int, Counter[str]] = {}
+        # ── Pass 1: compute document frequencies (streaming) ─────────
         doc_freq: Counter[str] = Counter()
+        last_id = 0
+        while True:
+            rows = await db.execute_fetchall(
+                "SELECT id, title, body FROM pages WHERE id > ? ORDER BY id LIMIT ?",
+                (last_id, _BATCH),
+            )
+            if not rows:
+                break
+            for page_id, title, body in rows:
+                text = f"{title or ''} {title or ''} {body or ''}"
+                tokens = tokenize(text)
+                doc_freq.update(set(tokens))  # set → count each term once per doc
+                last_id = page_id
 
-        for page_id, title, body in rows:
-            text = f"{title or ''} {title or ''} {body or ''}"  # Title weighted 2×.
-            tokens = tokenize(text)
-            tf = Counter(tokens)
-            doc_term_freqs[page_id] = tf
-            doc_freq.update(tf.keys())
-
-        # Clear old postings.
+        # ── Rebuild terms table ──────────────────────────────────────
         await db.execute("DELETE FROM postings")
         await db.execute("DELETE FROM terms")
+        await db.commit()
 
-        # Insert terms.
         all_terms = sorted(doc_freq.keys())
-        await db.executemany(
-            "INSERT INTO terms (term) VALUES (?)", [(t,) for t in all_terms]
-        )
+        # Insert terms in chunks to limit memory.
+        for i in range(0, len(all_terms), 5000):
+            await db.executemany(
+                "INSERT INTO terms (term) VALUES (?)",
+                [(t,) for t in all_terms[i : i + 5000]],
+            )
         await db.commit()
+        del all_terms  # free memory
 
-        # Build term→id mapping.
-        term_rows = await db.execute_fetchall("SELECT id, term FROM terms")
-        term_id_map = {term: tid for tid, term in term_rows}
+        # Build term→id mapping (streamed).
+        term_id_map: dict[str, int] = {}
+        last_tid = 0
+        while True:
+            trows = await db.execute_fetchall(
+                "SELECT id, term FROM terms WHERE id > ? ORDER BY id LIMIT ?",
+                (last_tid, 10000),
+            )
+            if not trows:
+                break
+            for tid, term in trows:
+                term_id_map[term] = tid
+                last_tid = tid
 
-        # Insert postings with TF-IDF.
-        postings = []
-        for page_id, tf_counter in doc_term_freqs.items():
-            total_terms = sum(tf_counter.values()) or 1
-            for term, count in tf_counter.items():
-                tf = count / total_terms
-                idf = math.log((1 + total_docs) / (1 + doc_freq[term])) + 1
-                tfidf = tf * idf
-                positions = ""  # Could store positions later for phrase matching.
-                postings.append((term_id_map[term], page_id, tfidf, positions))
+        # ── Pass 2: compute TF-IDF and insert postings in batches ────
+        last_id = 0
+        indexed = 0
+        while True:
+            rows = await db.execute_fetchall(
+                "SELECT id, title, body FROM pages WHERE id > ? ORDER BY id LIMIT ?",
+                (last_id, _BATCH),
+            )
+            if not rows:
+                break
 
-        await db.executemany(
-            "INSERT INTO postings (term_id, page_id, tf, positions) VALUES (?, ?, ?, ?)",
-            postings,
-        )
-        await db.commit()
-        log.info("Indexed %d pages with %d unique terms.", total_docs, len(all_terms))
-        return total_docs
+            postings_batch: list[tuple] = []
+            for page_id, title, body in rows:
+                text = f"{title or ''} {title or ''} {body or ''}"
+                tokens = tokenize(text)
+                tf_counter = Counter(tokens)
+                total_terms = sum(tf_counter.values()) or 1
+                for term, count in tf_counter.items():
+                    tf = count / total_terms
+                    idf = math.log((1 + total_docs) / (1 + doc_freq[term])) + 1
+                    tfidf = tf * idf
+                    postings_batch.append((term_id_map[term], page_id, tfidf, ""))
+                indexed += 1
+                last_id = page_id
+
+            if postings_batch:
+                await db.executemany(
+                    "INSERT INTO postings (term_id, page_id, tf, positions) VALUES (?, ?, ?, ?)",
+                    postings_batch,
+                )
+                await db.commit()
+
+            if indexed % 5000 == 0:
+                log.info("Indexed %d / %d pages…", indexed, total_docs)
+
+        log.info("Indexed %d pages with %d unique terms.", indexed, len(term_id_map))
+        return indexed
     finally:
         await db.close()
 

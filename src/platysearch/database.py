@@ -108,6 +108,10 @@ async def get_db() -> aiosqlite.Connection:
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA foreign_keys=ON")
+    # Limit SQLite memory: ~2 MB page cache (negative = KB).
+    await db.execute("PRAGMA cache_size=-2000")
+    # Disable memory-mapped I/O to keep RSS low on small containers.
+    await db.execute("PRAGMA mmap_size=0")
     return db
 
 
