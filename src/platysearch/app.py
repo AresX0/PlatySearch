@@ -100,9 +100,11 @@ async def health() -> dict:
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon() -> FastAPIResponse:
-    logo = Path(__file__).parent / "static" / "logo.png"
-    if logo.is_file():
-        return FastAPIResponse(content=logo.read_bytes(), media_type="image/png")
+    icon = Path(__file__).parent / "static" / "favicon.png"
+    if not icon.is_file():
+        icon = Path(__file__).parent / "static" / "logo.png"
+    if icon.is_file():
+        return FastAPIResponse(content=icon.read_bytes(), media_type="image/png")
     return FastAPIResponse(status_code=404)
 
 
