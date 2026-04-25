@@ -155,9 +155,9 @@ async def home(request: Request, q: str | None = None, tab: str = "all"):
             federated_results = await query_all_peers(q, tab="all", limit=10)
             fallback = True
     return templates.TemplateResponse(
+        request,
         "search.html",
         {
-            "request": request,
             "query": q or "",
             "results": results,
             "federated_results": federated_results,
@@ -177,8 +177,9 @@ async def admin_login_page(request: Request, next: str = "/admin/dashboard"):
     if is_authenticated(request):
         return RedirectResponse(next, status_code=303)
     return templates.TemplateResponse(
+        request,
         "login.html",
-        {"request": request, "error": "", "next_url": next},
+        {"error": "", "next_url": next},
     )
 
 
@@ -188,8 +189,9 @@ async def admin_login(request: Request, password: str = Form(...), next: str = F
 
     if not check_password(password):
         return templates.TemplateResponse(
+            request,
             "login.html",
-            {"request": request, "error": "Invalid password.", "next_url": next},
+            {"error": "Invalid password.", "next_url": next},
             status_code=401,
         )
     cookie_val, cookie_name = create_session_cookie()
@@ -232,9 +234,9 @@ async def admin_dashboard(request: Request, message: str = "", message_type: str
     history = await get_job_history()
 
     return templates.TemplateResponse(
+        request,
         "admin.html",
         {
-            "request": request,
             "current_job": get_current_job(),
             "history": history,
             "next_runs": get_next_run_times(),
@@ -557,9 +559,9 @@ async def admin_federation(request: Request, message: str = "", message_type: st
     }
 
     return templates.TemplateResponse(
+        request,
         "federation.html",
         {
-            "request": request,
             "peers": peers,
             "server_info": server_info,
             "settings": settings_data,
