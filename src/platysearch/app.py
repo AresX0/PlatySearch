@@ -98,6 +98,14 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> FastAPIResponse:
+    logo = Path(__file__).parent / "static" / "logo.png"
+    if logo.is_file():
+        return FastAPIResponse(content=logo.read_bytes(), media_type="image/png")
+    return FastAPIResponse(status_code=404)
+
+
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
