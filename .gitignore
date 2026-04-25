@@ -19,3 +19,5 @@ applogs*/
 logs*/
 *.zip
 cookies.txt
+cookies.tmp
+azure_logs/
