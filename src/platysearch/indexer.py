@@ -11,7 +11,7 @@ import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 
-from platysearch.database import get_db
+from platysearch.database import get_db, get_meta, set_meta
 
 log = logging.getLogger(__name__)
 
@@ -43,11 +43,36 @@ def tokenize(text: str) -> list[str]:
     return [t for t in tokens if _TOKEN_RE.fullmatch(t) and t not in stops]
 
 
-async def index_all_pages() -> int:
+async def index_all_pages(force: bool = False) -> int:
     """(Re-)index every page currently stored. Returns number of pages indexed.
 
-    Uses batched processing to stay within tight memory limits (e.g. 1.75 GB).
+    Uses batched processing to stay within tight memory limits.
+
+    Skips work entirely when no new pages have been added since the last
+    successful index (tracked via the ``meta`` table). Pass ``force=True``
+    to bypass the skip and force a full rebuild.
     """
+    # ── Fast skip: no new pages since last index ─────────────────────
+    if not force:
+        db_chk = await get_db()
+        try:
+            cur = await db_chk.execute("SELECT COALESCE(MAX(id), 0) FROM pages")
+            row = await cur.fetchone()
+            current_max = row[0] if row else 0
+            cur = await db_chk.execute("SELECT COUNT(*) FROM pages")
+            row = await cur.fetchone()
+            current_count = row[0] if row else 0
+        finally:
+            await db_chk.close()
+        last_max_str = await get_meta("last_indexed_max_page_id")
+        last_max = int(last_max_str) if last_max_str and last_max_str.isdigit() else 0
+        if current_max > 0 and current_max == last_max:
+            log.info(
+                "Index up-to-date (max page id %d unchanged) \u2014 skipping rebuild.",
+                current_max,
+            )
+            return current_count
+
     _BATCH = 500
     db = await get_db()
     try:
@@ -106,8 +131,12 @@ async def index_all_pages() -> int:
                 last_tid = tid
 
         # ── Pass 2: compute TF-IDF and insert postings in batches ────
+        # Flush postings every _POSTINGS_FLUSH rows to keep memory bounded
+        # regardless of vocabulary size or document length.
+        _POSTINGS_FLUSH = 50_000
         last_id = 0
         indexed = 0
+        postings_batch: list[tuple] = []
         while True:
             rows = await db.execute_fetchall(
                 "SELECT id, title, body FROM pages WHERE id > ? ORDER BY id LIMIT ?",
@@ -116,7 +145,6 @@ async def index_all_pages() -> int:
             if not rows:
                 break
 
-            postings_batch: list[tuple] = []
             for page_id, title, body in rows:
                 text = f"{title or ''} {title or ''} {body or ''}"
                 tokens = tokenize(text)
@@ -130,48 +158,64 @@ async def index_all_pages() -> int:
                 indexed += 1
                 last_id = page_id
 
-            if postings_batch:
-                await db.executemany(
-                    "INSERT INTO postings (term_id, page_id, tf, positions) VALUES (?, ?, ?, ?)",
-                    postings_batch,
-                )
-                await db.commit()
+                if len(postings_batch) >= _POSTINGS_FLUSH:
+                    await db.executemany(
+                        "INSERT INTO postings (term_id, page_id, tf, positions) VALUES (?, ?, ?, ?)",
+                        postings_batch,
+                    )
+                    await db.commit()
+                    postings_batch.clear()
 
             if indexed % 5000 == 0:
                 log.info("Indexed %d / %d pages…", indexed, total_docs)
 
+        if postings_batch:
+            await db.executemany(
+                "INSERT INTO postings (term_id, page_id, tf, positions) VALUES (?, ?, ?, ?)",
+                postings_batch,
+            )
+            await db.commit()
+            postings_batch.clear()
+
         log.info("Indexed %d pages with %d unique terms.", indexed, len(term_id_map))
+        # Record watermark so subsequent calls can skip when nothing changed.
+        cur = await db.execute("SELECT COALESCE(MAX(id), 0) FROM pages")
+        row = await cur.fetchone()
+        max_id = row[0] if row else 0
+        await set_meta("last_indexed_max_page_id", str(max_id))
         return indexed
     finally:
         await db.close()
 
 
 async def compute_link_scores() -> None:
-    """Compute inbound link count and domain diversity per page."""
+    """Compute inbound link count and domain diversity per page.
+
+    Pure-SQL streaming implementation — never materialises all rows in Python,
+    so memory usage stays flat even with millions of pages/links.
+    """
     db = await get_db()
     try:
-        # Inbound link counts.
-        rows = await db.execute_fetchall(
+        await db.execute("DELETE FROM page_scores")
+        await db.commit()
+        # Single INSERT...SELECT that SQLite streams internally.
+        await db.execute(
             """
+            INSERT INTO page_scores
+                (page_id, inbound_links, domain_diversity, content_length)
             SELECT p.id,
                    COUNT(l.id) AS inbound,
                    COUNT(DISTINCT src.domain) AS domain_div,
-                   LENGTH(p.body) AS clen
+                   COALESCE(LENGTH(p.body), 0) AS clen
             FROM pages p
             LEFT JOIN links l ON l.target_url = p.url
             LEFT JOIN pages src ON src.id = l.source_id
             GROUP BY p.id
             """
         )
-        await db.execute("DELETE FROM page_scores")
-        for page_id, inbound, domain_div, clen in rows:
-            await db.execute(
-                """INSERT OR REPLACE INTO page_scores
-                   (page_id, inbound_links, domain_diversity, content_length)
-                   VALUES (?, ?, ?, ?)""",
-                (page_id, inbound, domain_div, clen or 0),
-            )
         await db.commit()
-        log.info("Computed link scores for %d pages.", len(rows))
+        cur = await db.execute("SELECT COUNT(*) FROM page_scores")
+        row = await cur.fetchone()
+        log.info("Computed link scores for %d pages.", row[0] if row else 0)
     finally:
         await db.close()

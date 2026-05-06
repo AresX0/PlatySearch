@@ -86,6 +86,11 @@ CREATE TABLE IF NOT EXISTS custom_seeds (
     added_at TEXT    DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
 CREATE TABLE IF NOT EXISTS job_history (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     job_type       TEXT    NOT NULL,
@@ -108,10 +113,13 @@ async def get_db() -> aiosqlite.Connection:
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA foreign_keys=ON")
-    # Limit SQLite memory: ~2 MB page cache (negative = KB).
-    await db.execute("PRAGMA cache_size=-2000")
-    # Disable memory-mapped I/O to keep RSS low on small containers.
+    # SQLite page cache: ~64 MB (negative = KB). Tuned for B2 (3.5 GB).
+    await db.execute("PRAGMA cache_size=-65536")
+    # Disable memory-mapped I/O to keep RSS predictable.
     await db.execute("PRAGMA mmap_size=0")
+    # Faster writes \u2014 still safe with WAL.
+    await db.execute("PRAGMA synchronous=NORMAL")
+    await db.execute("PRAGMA temp_store=MEMORY")
     return db
 
 
@@ -120,6 +128,32 @@ async def init_db() -> None:
     db = await get_db()
     try:
         await db.executescript(_SCHEMA)
+        await db.commit()
+    finally:
+        await db.close()
+
+
+# ── Meta key/value helpers ───────────────────────────────────────────────────
+
+
+async def get_meta(key: str) -> str | None:
+    db = await get_db()
+    try:
+        cur = await db.execute("SELECT value FROM meta WHERE key = ?", (key,))
+        row = await cur.fetchone()
+        return row[0] if row else None
+    finally:
+        await db.close()
+
+
+async def set_meta(key: str, value: str) -> None:
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
         await db.commit()
     finally:
         await db.close()

@@ -54,6 +54,10 @@ async def crawl(
         fetched = 0
         in_flight: set[str] = set()  # URLs currently being fetched
         domain_failures: dict[str, int] = {}  # track failures per domain
+        domain_fetched: dict[str, int] = {}  # pages stored per domain this run
+        # Cap per domain so one site doesn't consume the whole budget.
+        # Scales with budget: ~5% of max_pages, min 50, max 500.
+        per_domain_cap = max(50, min(500, max_pages // 20))
         crawl_start = time.monotonic()
         robots = RobotsChecker(settings.user_agent)
 
@@ -106,9 +110,12 @@ async def crawl(
                     break
 
                 # Grab a batch of URLs from the queue.
+                # ORDER BY depth ASC, RANDOM() spreads work across domains at
+                # the same depth instead of draining one domain at a time.
                 batch_size = min(concurrency, max_pages - fetched)
                 rows = await db.execute_fetchall(
-                    "SELECT id, url, domain, depth FROM crawl_queue ORDER BY depth ASC LIMIT ?",
+                    "SELECT id, url, domain, depth FROM crawl_queue "
+                    "ORDER BY depth ASC, RANDOM() LIMIT ?",
                     (batch_size * 20,),  # over-fetch aggressively to handle dead URLs
                 )
                 if not rows:
@@ -118,7 +125,10 @@ async def crawl(
                 # Filter batch: remove already-fetched and in-flight URLs.
                 batch = []
                 skipped_rows = []
+                capped_count = 0  # urls left for next run because their domain hit the cap
+                considered = 0
                 for queue_id, url, domain, depth in rows:
+                    considered += 1
                     # If domain is in the skip list, leave it in the queue.
                     if skip_domains and domain in skip_domains:
                         skipped_rows.append((queue_id, url, domain, depth))
@@ -126,6 +136,11 @@ async def crawl(
                     # Skip domains that have failed too many times (likely dead).
                     if domain_failures.get(domain, 0) >= 5:
                         await db.execute("DELETE FROM crawl_queue WHERE id = ?", (queue_id,))
+                        continue
+                    # Per-run cap: if this domain has already filled its slice,
+                    # leave the URL in the queue for a later run and move on.
+                    if domain_fetched.get(domain, 0) >= per_domain_cap:
+                        capped_count += 1
                         continue
                     await db.execute("DELETE FROM crawl_queue WHERE id = ?", (queue_id,))
                     if url in in_flight:
@@ -150,6 +165,15 @@ async def crawl(
                 await db.commit()
 
                 if not batch:
+                    # If everything we pulled was capped (per-domain limit) and
+                    # there were no other usable rows, we'd loop forever. Stop.
+                    if capped_count > 0 and capped_count == considered:
+                        log.info(
+                            "All queued URLs are for capped domains \u2014 ending crawl run "
+                            "(fetched=%d, per_domain_cap=%d).",
+                            fetched, per_domain_cap,
+                        )
+                        break
                     continue
 
                 # Fetch all URLs in the batch concurrently.
@@ -212,6 +236,7 @@ async def crawl(
                         )
 
                     fetched += 1
+                    domain_fetched[domain] = domain_fetched.get(domain, 0) + 1
                     log.info("[%d] Crawled: %s (%s)", fetched, parsed.title or "(no title)", url)
 
                 await db.commit()

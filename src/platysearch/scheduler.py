@@ -155,6 +155,10 @@ _NIGHTLY_SEEDS: list[str] = [
     "https://www.starwars.com/",
     "https://www.starwars.com/news",
     "https://www.starwars.com/databank",
+    "https://starwars.fandom.com/wiki/Main_Page",
+    "https://starwars.fandom.com/wiki/Star_Wars",
+    "https://theforce.net/",
+    "https://www.starwarsnewsnet.com/",
     "https://www.marvel.com/",
     "https://www.marvel.com/characters",
     "https://www.marvel.com/comics",
@@ -223,6 +227,12 @@ _NIGHTLY_SEEDS: list[str] = [
     "https://www.npr.org/",
     "https://www.npr.org/sections/science/",
     "https://www.npr.org/sections/technology/",
+    "https://www.npr.org/sections/news/",
+    "https://www.npr.org/sections/world/",
+    "https://www.pbs.org/",
+    "https://www.pbs.org/newshour/",
+    "https://www.pbs.org/newshour/science",
+    "https://www.pbs.org/newshour/world",
     # ── News Aggregators / Financial News ──
     "https://www.bloomberg.com/",
     "https://www.cnbc.com/",
@@ -253,6 +263,10 @@ _NIGHTLY_SEEDS: list[str] = [
     "https://www.sans.org/blog/",
     "https://krebsonsecurity.com/",
     "https://onlinedegrees.sandiego.edu/top-cyber-security-blogs-websites/",
+    "https://www.microsoft.com/en-us/security/blog/",
+    "https://www.cve.org/",
+    # ── Tech / Vendors ──
+    "https://www.apple.com/",
     # ── Universities / Research ──
     "https://www.mit.edu/",
     "https://news.mit.edu/",
@@ -262,7 +276,41 @@ _NIGHTLY_SEEDS: list[str] = [
     "https://www.bcm.edu/research",
     "https://www.rice.edu/",
     "https://news.rice.edu/",
+    # ── Libraries ──
+    "https://libraries.mit.edu/",
+    "https://library.harvard.edu/",
+    "https://www.library.rice.edu/",
+    "https://library.tmc.edu/",
+    "https://www.bodleian.ox.ac.uk/",
+    # ── Academic Search / Scholarly ──
     "https://pubmed.ncbi.nlm.nih.gov/",
+    "https://www.ncbi.nlm.nih.gov/pmc/",
+    "https://scholar.google.com/",
+    "https://www.microsoft.com/en-us/research/",
+    "https://www.microsoft.com/en-us/research/research-area/",
+    "https://www.microsoft.com/en-us/research/publications/",
+    "https://www.crossref.org/",
+    "https://www.crossref.org/blog/",
+    "https://search.crossref.org/",
+    "https://www.lens.org/",
+    "https://www.lens.org/lens/search/scholar/list",
+    "https://openalex.org/",
+    "https://docs.openalex.org/",
+    "https://www.scopus.com/",
+    "https://www.elsevier.com/products/scopus",
+    "https://clarivate.com/products/scientific-and-academic-research/research-discovery-and-workflow-solutions/webofscience-platform/",
+    "https://mjl.clarivate.com/home",
+    "https://www.embase.com/",
+    "https://www.elsevier.com/products/embase",
+    "https://doaj.org/",
+    "https://doaj.org/search/journals",
+    "https://doaj.org/search/articles",
+    "https://mjl.clarivate.com/search-results?issn=&hide_exact_match_fl=true&utm_source=mjl&utm_medium=share-by-link&utm_campaign=search-results-share-this-journal&utm_content=sciedition",
+    "https://abdc.edu.au/abdc-journal-quality-list/",
+    "https://www.ugc.gov.in/journallist/",
+    "https://ugccare.unipune.ac.in/Apps1/User/WebA/SearchList",
+    "https://listofjournals.com/sci.php",
+    "https://listofjournals.com/",
     # ── NASA & Space ──
     "https://www.nasa.gov/",
     "https://www.nasa.gov/news/",
@@ -470,14 +518,35 @@ _nightly_running = False
 async def _hourly_refresh() -> None:
     """Re-index and re-score so new pages appear in results quickly."""
     if _nightly_running:
-        log.info("Hourly refresh skipped — nightly update is running.")
+        log.info("Hourly refresh skipped \u2014 nightly update is running.")
         return
 
     from platysearch.ai_detector import score_all_pages
+    from platysearch.database import get_db, get_meta
     from platysearch.indexer import compute_link_scores, index_all_pages
 
+    # ── Fast skip when no new pages have arrived since last index ──
+    db = await get_db()
+    try:
+        cur = await db.execute("SELECT COALESCE(MAX(id), 0) FROM pages")
+        row = await cur.fetchone()
+        current_max = row[0] if row else 0
+    finally:
+        await db.close()
+    last_max_str = await get_meta("last_indexed_max_page_id")
+    last_max = int(last_max_str) if last_max_str and last_max_str.isdigit() else 0
+    if current_max > 0 and current_max == last_max:
+        log.info(
+            "Hourly refresh: no new pages since last index (max id %d) \u2014 skipping.",
+            current_max,
+        )
+        return
+
     job = await _start_job("hourly_refresh")
-    log.info("Hourly refresh: re-indexing and scoring…")
+    log.info(
+        "Hourly refresh: re-indexing and scoring (last=%d, current=%d)\u2026",
+        last_max, current_max,
+    )
     t0 = time.monotonic()
     try:
         job.pages_indexed = await index_all_pages()

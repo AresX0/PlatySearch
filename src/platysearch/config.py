@@ -11,7 +11,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     db_path: Path = Path("data/platysearch.db")
     crawl_delay: float = 0.2
-    crawl_concurrency: int = 5
+    crawl_concurrency: int = 10
     max_pages: int = 10_000
     ai_penalty: float = 0.6
     host: str = "0.0.0.0"
@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     scheduler_hour: int = 3
     scheduler_minute: int = 0
     scheduler_timezone: str = "America/Chicago"
-    nightly_crawl_pages: int = 2000
+    nightly_crawl_pages: int = 5000
     max_db_size_mb: int = 8000
     crawl_enabled: bool = True
     admin_password: str = ""
