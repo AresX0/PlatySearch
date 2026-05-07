@@ -8,6 +8,7 @@ RUN apt-get update && \
 
 COPY pyproject.toml .
 COPY src/ src/
+COPY scripts/ scripts/
 
 RUN pip install --no-cache-dir . && \
     python -c "import nltk; nltk.download('punkt_tab', quiet=True); nltk.download('stopwords', quiet=True)"

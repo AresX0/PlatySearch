@@ -195,6 +195,10 @@ async def crawl(
 
                     _, _, parsed, html, status_code, content_type, depth = result
 
+                    # Only persist raw HTML for Wikipedia (used by refextractor);
+                    # for everything else we keep just the parsed body to save space.
+                    stored_html = html if domain == "en.wikipedia.org" else None
+
                     await db.execute(
                         """INSERT OR IGNORE INTO pages
                            (url, domain, title, body, raw_html, fetched_at, status_code, content_hash, content_type)
@@ -204,7 +208,7 @@ async def crawl(
                             domain,
                             parsed.title,
                             parsed.body,
-                            html,
+                            stored_html,
                             datetime.now(timezone.utc).isoformat(),
                             status_code,
                             parsed.content_hash,
@@ -218,7 +222,7 @@ async def crawl(
 
                     for link in parsed.links:
                         await db.execute(
-                            "INSERT INTO links (source_id, target_url) VALUES (?, ?)",
+                            "INSERT OR IGNORE INTO links (source_id, target_url) VALUES (?, ?)",
                             (page_id, link),
                         )
                         link_domain = urlparse(link).netloc
@@ -230,7 +234,7 @@ async def crawl(
                     # Store extracted images.
                     for img in parsed.images:
                         await db.execute(
-                            "INSERT INTO page_images (page_id, src_url, alt_text, width, height) "
+                            "INSERT OR IGNORE INTO page_images (page_id, src_url, alt_text, width, height) "
                             "VALUES (?, ?, ?, ?, ?)",
                             (page_id, img.src, img.alt, img.width, img.height),
                         )

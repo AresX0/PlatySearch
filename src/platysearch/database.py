@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS page_images (
 
 CREATE INDEX IF NOT EXISTS idx_pages_url ON pages(url);
 CREATE INDEX IF NOT EXISTS idx_pages_domain ON pages(domain);
+CREATE INDEX IF NOT EXISTS idx_pages_content_hash ON pages(content_hash);
 CREATE INDEX IF NOT EXISTS idx_terms_term ON terms(term);
 CREATE INDEX IF NOT EXISTS idx_postings_term ON postings(term_id);
 CREATE INDEX IF NOT EXISTS idx_crawl_queue_domain ON crawl_queue(domain);
@@ -129,6 +130,19 @@ async def init_db() -> None:
     try:
         await db.executescript(_SCHEMA)
         await db.commit()
+        # Best-effort unique indexes (skip if existing data has duplicates;
+        # run dedupe_and_compact.py to clean up first, then they will succeed).
+        for stmt in (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_links_source_target "
+            "ON links(source_id, target_url)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_page_images_page_src "
+            "ON page_images(page_id, src_url)",
+        ):
+            try:
+                await db.execute(stmt)
+                await db.commit()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Skipping unique index (existing duplicates?): %s", exc)
     finally:
         await db.close()
 

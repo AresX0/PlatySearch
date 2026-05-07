@@ -216,30 +216,65 @@ async def search(query: str, tab: str = "all", limit: int = 20) -> list[SearchRe
 
         term_ids = [row[0] for row in term_rows]
         matched_terms = {row[0]: row[1] for row in term_rows}
+        num_query_terms = len(term_ids)
 
-        # Gather TF-IDF scores for matching documents.
+        # ── Per-term document frequency for IDF ──────────────────────────
+        # Without IDF, the common token in a multi-word query (e.g. "star"
+        # in "star wars") swamps the rare one ("wars"), and pages that only
+        # match the common token win.
+        total_pages_rows = list(
+            await db.execute_fetchall("SELECT COUNT(*) FROM pages")
+        )
+        n_docs = max(
+            int(total_pages_rows[0][0]) if total_pages_rows else 1, 1
+        )
+
         ph2 = ",".join("?" for _ in term_ids)
+        df_rows = await db.execute_fetchall(
+            f"""SELECT term_id, COUNT(*)
+                FROM postings WHERE term_id IN ({ph2}) GROUP BY term_id""",
+            term_ids,
+        )
+        idf_map: dict[int, float] = {
+            tid: math.log((n_docs + 1) / (df + 1)) + 1.0 for tid, df in df_rows
+        }
+        # Default IDF for any term not in the map (shouldn't happen).
+        for tid in term_ids:
+            idf_map.setdefault(tid, 1.0)
+
+        # Aggregate in SQL using a CASE expression so we don't pull every
+        # posting row into Python. SUM(tf*idf) is the relevance score;
+        # COUNT(DISTINCT term_id) is the coverage (how many query terms
+        # this page contains).
+        idf_case = " ".join(
+            f"WHEN {int(tid)} THEN {idf_map[tid]:.6f}" for tid in term_ids
+        )
         posting_rows = await db.execute_fetchall(
-            f"""SELECT page_id, SUM(tf) AS relevance
+            f"""SELECT page_id,
+                       SUM(tf * (CASE term_id {idf_case} ELSE 1.0 END))
+                           AS relevance,
+                       COUNT(DISTINCT term_id) AS matched_count
                 FROM postings
                 WHERE term_id IN ({ph2})
                 GROUP BY page_id
-                ORDER BY relevance DESC
+                ORDER BY matched_count DESC, relevance DESC
                 LIMIT 200""",
             term_ids,
         )
-        if not posting_rows:
+        scored = [(int(r[0]), float(r[1]), int(r[2])) for r in posting_rows]
+        if not scored:
             return []
 
-        page_ids = [r[0] for r in posting_rows]
-        relevance_map = {r[0]: r[1] for r in posting_rows}
+        page_ids = [s[0] for s in scored]
+        relevance_map = {s[0]: s[1] for s in scored}
+        matched_count_map = {s[0]: s[2] for s in scored}
 
         # Fetch page metadata and scores.
         ph3 = ",".join("?" for _ in page_ids)
 
         # Tab-based content-type filter.
         type_filter = ""
-        query_params = list(page_ids)
+        query_params: list[object] = list(page_ids)
         if tab == "news":
             type_filter = "AND p.content_type = ?"
             query_params.append("news")
@@ -271,6 +306,7 @@ async def search(query: str, tab: str = "all", limit: int = 20) -> list[SearchRe
              content_length, ai_score, quality_score) = row
 
             relevance = relevance_map.get(page_id, 0.0)
+            matched_count = matched_count_map.get(page_id, 0)
 
             # ── Authority signal (log-scaled inbound links) ──
             authority = math.log1p(inbound) * (1 + 0.5 * math.log1p(domain_div))
@@ -279,13 +315,32 @@ async def search(query: str, tab: str = "all", limit: int = 20) -> list[SearchRe
             # Reward pages with a decent amount of text (diminishing returns).
             length_factor = min(math.log1p(content_length) / 10, 1.0)
 
+            # ── Title boost: pages whose title contains query tokens are
+            # much more likely to be on-topic than ones that just mention them.
+            title_lower = (title or "").lower()
+            title_hits = sum(1 for t in tokens if t in title_lower)
+            title_boost = 1.0 + 0.6 * (title_hits / max(num_query_terms, 1))
+            # Strong demotion when the title contains none of the query
+            # tokens — those pages just happen to mention the term in
+            # passing and are usually off-topic.
+            if title_hits == 0:
+                title_boost *= 0.4
+
             # ── Combine signals ──
             raw_score = (
-                relevance * 10.0
+                relevance * 30.0
                 + authority * 2.0
                 + length_factor * 1.0
                 + quality_score * 1.0
-            )
+            ) * title_boost
+
+            # ── Partial-match penalty ──
+            # If a page only matches some of the query terms, it's likely
+            # off-topic (e.g. "star" matching a Star Trek page for query
+            # "star wars"). Apply a quadratic coverage factor.
+            if num_query_terms > 1 and matched_count < num_query_terms:
+                coverage = matched_count / num_query_terms
+                raw_score *= coverage * coverage
 
             # ── AI-content penalty ──
             # ai_score in [0, 1] — higher means more likely AI.
