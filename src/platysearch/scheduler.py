@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -368,6 +369,231 @@ _IMAGE_SEEDS: list[str] = [
 ]
 
 
+# ── Daily news / cybersecurity RSS feeds ─────────────────────────────────────
+#
+# Pulled fresh every day at 10:00 AM America/Chicago.  These are the official
+# feeds for the news, science, and cybersecurity sites we track.  Article URLs
+# extracted from each feed are enqueued for crawling and then indexed/scored.
+
+_NEWS_FEEDS: list[str] = [
+    # ── General / national news ──
+    "https://feeds.npr.org/1001/rss.xml",            # NPR top stories
+    "https://feeds.npr.org/1004/rss.xml",            # NPR world
+    "https://feeds.npr.org/1019/rss.xml",            # NPR technology
+    "https://feeds.npr.org/1007/rss.xml",            # NPR science
+    "https://www.pbs.org/newshour/feeds/rss/headlines",
+    "https://www.pbs.org/newshour/feeds/rss/world",
+    "https://www.pbs.org/newshour/feeds/rss/science",
+    "https://feeds.bbci.co.uk/news/rss.xml",
+    "https://feeds.bbci.co.uk/news/world/rss.xml",
+    "https://feeds.bbci.co.uk/news/technology/rss.xml",
+    "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
+    "https://www.theguardian.com/world/rss",
+    "https://www.theguardian.com/us-news/rss",
+    "https://www.theguardian.com/technology/rss",
+    "https://www.theguardian.com/science/rss",
+    "https://www.aljazeera.com/xml/rss/all.xml",
+    "https://feeds.washingtonpost.com/rss/world",
+    "https://feeds.washingtonpost.com/rss/national",
+    "https://feeds.washingtonpost.com/rss/business/technology",
+    "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml",
+    "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
+    "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",
+    "https://rss.nytimes.com/services/xml/rss/nyt/Science.xml",
+    "https://feeds.reuters.com/reuters/topNews",
+    "https://feeds.reuters.com/reuters/worldNews",
+    "https://feeds.reuters.com/reuters/technologyNews",
+    "https://www.huffpost.com/section/front-page/feed",
+    "https://www.politico.com/rss/politicopicks.xml",
+    "https://www.vox.com/rss/index.xml",
+    "https://www.texastribune.org/feeds/all/",
+    # ── Wires / international ──
+    "https://apnews.com/index.rss",
+    "https://www.dw.com/atom/rss-en-top",
+    "https://www.euronews.com/rss",
+    # ── Science / tech news ──
+    "https://www.sciencedaily.com/rss/all.xml",
+    "https://www.newscientist.com/feed/home/",
+    "https://rss.sciam.com/ScientificAmerican-Global",
+    "https://www.sciencenews.org/feed",
+    "https://phys.org/rss-feed/",
+    "https://www.nature.com/nature.rss",
+    "https://feeds.arstechnica.com/arstechnica/index",
+    "https://feeds.arstechnica.com/arstechnica/science",
+    "https://feeds.arstechnica.com/arstechnica/security",
+    "https://www.wired.com/feed/rss",
+    "https://www.wired.com/feed/category/science/latest/rss",
+    "https://www.wired.com/feed/category/security/latest/rss",
+    "https://www.popsci.com/feed/",
+    # ── Cybersecurity ──
+    "https://www.darkreading.com/rss.xml",
+    "https://feeds.feedburner.com/TheHackersNews",
+    "https://krebsonsecurity.com/feed/",
+    "https://isc.sans.edu/rssfeed.xml",
+    "https://www.sans.org/blog/feed.xml",
+    "https://www.microsoft.com/en-us/security/blog/feed/",
+    "https://www.cisa.gov/news.xml",
+    "https://www.cisa.gov/cybersecurity-advisories/all.xml",
+    "https://www.bleepingcomputer.com/feed/",
+    "https://www.schneier.com/feed/atom/",
+    "https://www.csoonline.com/feed/",
+    "https://www.securityweek.com/feed/",
+    # ── Aggregators (HN front page) ──
+    "https://hnrss.org/frontpage",
+    "https://hnrss.org/newest?points=100",
+]
+
+
+async def _fetch_news_urls_from_feeds(
+    feeds: list[str],
+    per_feed_limit: int = 60,
+    timeout_secs: int = 15,
+) -> list[str]:
+    """Fetch each RSS/Atom feed and return a deduplicated list of article URLs."""
+    import aiohttp
+    import feedparser
+
+    settings = get_settings()
+    headers = {"User-Agent": settings.user_agent}
+    timeout = aiohttp.ClientTimeout(total=timeout_secs)
+
+    seen: set[str] = set()
+    urls: list[str] = []
+
+    sem = asyncio.Semaphore(8)
+
+    async def _one(session: aiohttp.ClientSession, feed_url: str) -> list[str]:
+        async with sem:
+            try:
+                async with session.get(feed_url, allow_redirects=True) as resp:
+                    if resp.status != 200:
+                        log.info("Feed %s returned HTTP %d", feed_url, resp.status)
+                        return []
+                    body = await resp.read()
+            except Exception as exc:
+                log.info("Feed %s failed: %s", feed_url, exc)
+                return []
+        # feedparser is sync — run in thread to avoid blocking the loop.
+        parsed = await asyncio.to_thread(feedparser.parse, body)
+        out: list[str] = []
+        for entry in parsed.entries[:per_feed_limit]:
+            link = getattr(entry, "link", None)
+            if link and isinstance(link, str) and link.startswith(("http://", "https://")):
+                out.append(link)
+        return out
+
+    import ssl as _ssl
+    ssl_ctx = _ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = _ssl.CERT_NONE
+    connector = aiohttp.TCPConnector(limit=16, ssl=ssl_ctx)
+
+    async with aiohttp.ClientSession(
+        connector=connector, timeout=timeout, headers=headers,
+    ) as session:
+        results = await asyncio.gather(
+            *[_one(session, f) for f in feeds], return_exceptions=False,
+        )
+
+    for batch in results:
+        for u in batch:
+            if u not in seen:
+                seen.add(u)
+                urls.append(u)
+    return urls
+
+
+async def _daily_news_refresh() -> None:
+    """Pull fresh article URLs from RSS feeds and crawl/index them.
+
+    Scheduled daily at 10:00 AM America/Chicago.  Skipped if another job
+    is already running (will run on the next cron tick or be picked up
+    by the next nightly crawl).
+    """
+    global _nightly_running, _cancel_requested
+    if _current_job is not None:
+        log.warning(
+            "Daily news refresh skipped — a job is already running: %s",
+            _current_job.job_type,
+        )
+        return
+
+    import asyncio as _asyncio
+
+    from platysearch.ai_detector import score_all_pages
+    from platysearch.crawler import crawl
+    from platysearch.indexer import compute_link_scores, index_all_pages
+
+    _nightly_running = True
+    _cancel_requested = False
+    job = await _start_job("daily_news")
+    t0 = time.monotonic()
+    try:
+        log.info("Daily news refresh: fetching %d RSS feeds…", len(_NEWS_FEEDS))
+        try:
+            article_urls = await _asyncio.wait_for(
+                _fetch_news_urls_from_feeds(_NEWS_FEEDS),
+                timeout=300,  # 5 min hard cap on the whole feed-pull phase
+            )
+        except _asyncio.TimeoutError:
+            article_urls = []
+            log.warning("Feed-pull phase timed out after 5 min.")
+
+        log.info(
+            "Daily news refresh: discovered %d article URLs in %.0fs.",
+            len(article_urls), time.monotonic() - t0,
+        )
+
+        if article_urls:
+            # Cap so a runaway feed can't blow the budget.
+            max_articles = min(len(article_urls), 2000)
+            crawl_t0 = time.monotonic()
+            try:
+                count = await crawl(
+                    seeds=article_urls[:max_articles],
+                    max_pages=max_articles,
+                    max_seconds=30 * 60,  # 30 min crawl cap
+                    cancel_check=is_cancel_requested,
+                )
+                job.pages_crawled = count
+                await _update_job_progress(job)
+                log.info(
+                    "Daily news crawl finished: %d pages fetched in %.0fs.",
+                    count, time.monotonic() - crawl_t0,
+                )
+            except Exception as exc:
+                log.exception("Daily news crawl failed: %s", exc)
+                job.error = f"Crawl error: {exc}"
+                await _update_job_progress(job)
+
+        # Re-index + re-score so new articles surface immediately.
+        try:
+            job.pages_indexed = await index_all_pages()
+            await compute_link_scores()
+            await _update_job_progress(job)
+        except Exception:
+            log.exception("Daily news indexing failed.")
+
+        try:
+            job.pages_scored = await score_all_pages()
+            await _update_job_progress(job)
+        except Exception:
+            log.exception("Daily news scoring failed.")
+
+        _persist_db(get_settings().db_path)
+
+        if _cancel_requested:
+            await _finish_job(job, status="cancelled", error="Stopped by admin")
+        else:
+            await _finish_job(job)
+    except Exception as exc:
+        await _finish_job(job, status="failed", error=str(exc))
+        raise
+    finally:
+        _nightly_running = False
+        _cancel_requested = False
+
+
 async def _nightly_update() -> None:
     """Run a crawl cycle followed by re-indexing and scoring."""
     global _nightly_running, _cancel_requested
@@ -590,9 +816,26 @@ def start_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
     )
 
+    # Daily news / cybersecurity refresh from RSS feeds — 10:00 AM America/Chicago.
+    try:
+        from zoneinfo import ZoneInfo
+        chicago_tz = ZoneInfo("America/Chicago")
+    except Exception:
+        log.warning("Could not load America/Chicago timezone; falling back to UTC.")
+        chicago_tz = datetime.timezone.utc
+
+    _scheduler.add_job(
+        _daily_news_refresh,
+        trigger=CronTrigger(hour=10, minute=0, timezone=chicago_tz),
+        id="daily_news_refresh",
+        name="Daily news refresh from RSS feeds (10:00 AM Central)",
+        replace_existing=True,
+    )
+
     _scheduler.start()
     log.info(
-        "Scheduler started - crawl every 4 hours (first run NOW), re-index every 30 min",
+        "Scheduler started - crawl every 4 hours (first run NOW), "
+        "re-index every 30 min, news refresh daily at 10:00 AM Central",
     )
     return _scheduler
 

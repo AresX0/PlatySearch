@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import asyncio
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -204,6 +205,15 @@ async def search(query: str, tab: str = "all", limit: int = 20) -> list[SearchRe
     if not tokens:
         return []
 
+    # ── Kick off live-news RSS fetch in parallel for the news tab ────────
+    live_news_task: asyncio.Task[list] | None = None
+    if tab == "news":
+        from platysearch.live_news import search_live_news
+        from platysearch.scheduler import _NEWS_FEEDS
+        live_news_task = asyncio.create_task(
+            search_live_news(tokens, _NEWS_FEEDS, limit=limit),
+        )
+
     db = await get_db()
     try:
         # Resolve term ids.
@@ -212,165 +222,192 @@ async def search(query: str, tab: str = "all", limit: int = 20) -> list[SearchRe
             f"SELECT id, term FROM terms WHERE term IN ({placeholders})", tokens
         )
         if not term_rows:
-            return []
-
-        term_ids = [row[0] for row in term_rows]
-        matched_terms = {row[0]: row[1] for row in term_rows}
-        num_query_terms = len(term_ids)
-
-        # ── Per-term document frequency for IDF ──────────────────────────
-        # Without IDF, the common token in a multi-word query (e.g. "star"
-        # in "star wars") swamps the rare one ("wars"), and pages that only
-        # match the common token win.
-        total_pages_rows = list(
-            await db.execute_fetchall("SELECT COUNT(*) FROM pages")
-        )
-        n_docs = max(
-            int(total_pages_rows[0][0]) if total_pages_rows else 1, 1
-        )
-
-        ph2 = ",".join("?" for _ in term_ids)
-        df_rows = await db.execute_fetchall(
-            f"""SELECT term_id, COUNT(*)
-                FROM postings WHERE term_id IN ({ph2}) GROUP BY term_id""",
-            term_ids,
-        )
-        idf_map: dict[int, float] = {
-            tid: math.log((n_docs + 1) / (df + 1)) + 1.0 for tid, df in df_rows
-        }
-        # Default IDF for any term not in the map (shouldn't happen).
-        for tid in term_ids:
-            idf_map.setdefault(tid, 1.0)
-
-        # Aggregate in SQL using a CASE expression so we don't pull every
-        # posting row into Python. SUM(tf*idf) is the relevance score;
-        # COUNT(DISTINCT term_id) is the coverage (how many query terms
-        # this page contains).
-        idf_case = " ".join(
-            f"WHEN {int(tid)} THEN {idf_map[tid]:.6f}" for tid in term_ids
-        )
-        posting_rows = await db.execute_fetchall(
-            f"""SELECT page_id,
-                       SUM(tf * (CASE term_id {idf_case} ELSE 1.0 END))
-                           AS relevance,
-                       COUNT(DISTINCT term_id) AS matched_count
-                FROM postings
-                WHERE term_id IN ({ph2})
-                GROUP BY page_id
-                ORDER BY matched_count DESC, relevance DESC
-                LIMIT 200""",
-            term_ids,
-        )
-        scored = [(int(r[0]), float(r[1]), int(r[2])) for r in posting_rows]
-        if not scored:
-            return []
-
-        page_ids = [s[0] for s in scored]
-        relevance_map = {s[0]: s[1] for s in scored}
-        matched_count_map = {s[0]: s[2] for s in scored}
-
-        # Fetch page metadata and scores.
-        ph3 = ",".join("?" for _ in page_ids)
-
-        # Tab-based content-type filter.
-        type_filter = ""
-        query_params: list[object] = list(page_ids)
-        if tab == "news":
-            type_filter = "AND p.content_type = ?"
-            query_params.append("news")
-        elif tab == "images":
-            type_filter = "AND p.content_type = ?"
-            query_params.append("image")
-        elif tab == "video":
-            type_filter = "AND p.content_type = ?"
-            query_params.append("video")
-
-        page_rows = await db.execute_fetchall(
-            f"""SELECT p.id, p.url, p.title, p.body,
-                       COALESCE(s.inbound_links, 0),
-                       COALESCE(s.domain_diversity, 0),
-                       COALESCE(s.content_length, 0),
-                       COALESCE(s.ai_score, 0.0),
-                       COALESCE(s.quality_score, 0.0)
-                FROM pages p
-                LEFT JOIN page_scores s ON s.page_id = p.id
-                WHERE p.id IN ({ph3}) {type_filter}""",
-            query_params,
-        )
-
-        settings = get_settings()
-        results: list[SearchResult] = []
-
-        for row in page_rows:
-            (page_id, url, title, body, inbound, domain_div,
-             content_length, ai_score, quality_score) = row
-
-            relevance = relevance_map.get(page_id, 0.0)
-            matched_count = matched_count_map.get(page_id, 0)
-
-            # ── Authority signal (log-scaled inbound links) ──
-            authority = math.log1p(inbound) * (1 + 0.5 * math.log1p(domain_div))
-
-            # ── Content quality signal ──
-            # Reward pages with a decent amount of text (diminishing returns).
-            length_factor = min(math.log1p(content_length) / 10, 1.0)
-
-            # ── Title boost: pages whose title contains query tokens are
-            # much more likely to be on-topic than ones that just mention them.
-            title_lower = (title or "").lower()
-            title_hits = sum(1 for t in tokens if t in title_lower)
-            title_boost = 1.0 + 0.6 * (title_hits / max(num_query_terms, 1))
-            # Strong demotion when the title contains none of the query
-            # tokens — those pages just happen to mention the term in
-            # passing and are usually off-topic.
-            if title_hits == 0:
-                title_boost *= 0.4
-
-            # ── Combine signals ──
-            raw_score = (
-                relevance * 30.0
-                + authority * 2.0
-                + length_factor * 1.0
-                + quality_score * 1.0
-            ) * title_boost
-
-            # ── Partial-match penalty ──
-            # If a page only matches some of the query terms, it's likely
-            # off-topic (e.g. "star" matching a Star Trek page for query
-            # "star wars"). Apply a quadratic coverage factor.
-            if num_query_terms > 1 and matched_count < num_query_terms:
-                coverage = matched_count / num_query_terms
-                raw_score *= coverage * coverage
-
-            # ── AI-content penalty ──
-            # ai_score in [0, 1] — higher means more likely AI.
-            ai_multiplier = 1.0 - ai_score * (1.0 - settings.ai_penalty)
-            final_score = raw_score * ai_multiplier
-
-            # ── Domain preference signal ──
-            domain = urlparse(url).netloc.lower()
-            if domain in _PREFERRED_DOMAINS:
-                final_score *= _PREFERRED_BOOST
-            elif domain in _SOCIAL_MEDIA_DOMAINS:
-                final_score *= _SOCIAL_MEDIA_PENALTY
-            elif domain in _DEMOTED_DOMAINS:
-                final_score *= _DEMOTED_PENALTY
-
-            snippet = _make_snippet(body or "", tokens)
-
-            results.append(SearchResult(
-                page_id=page_id,
-                url=url,
-                title=title or url,
-                snippet=snippet,
-                score=final_score,
-                ai_score=ai_score,
-            ))
-
-        results.sort(key=lambda r: r.score, reverse=True)
-        return results[:limit]
+            results: list[SearchResult] = []
+        else:
+            term_ids = [row[0] for row in term_rows]
+            matched_terms = {row[0]: row[1] for row in term_rows}
+            num_query_terms = len(term_ids)
+            results = await _run_indexed_search(
+                db, tokens, term_ids, matched_terms, num_query_terms, tab, limit,
+            )
     finally:
         await db.close()
+
+    # ── Merge in live RSS news for the news tab ───────────────────
+    if live_news_task is not None:
+        live_entries: list = []
+        try:
+            live_entries = await asyncio.wait_for(live_news_task, timeout=8)
+        except (asyncio.TimeoutError, Exception):
+            log.debug("live news task timed out / failed", exc_info=True)
+
+        if live_entries:
+            existing_urls = {r.url for r in results}
+            live_urls_to_enqueue: list[str] = []
+            top_indexed_score = results[0].score if results else 100.0
+            base_live_score = max(top_indexed_score, 50.0)
+
+            live_results: list[SearchResult] = []
+            for i, entry in enumerate(live_entries):
+                if entry.url in existing_urls:
+                    continue
+                live_urls_to_enqueue.append(entry.url)
+                synth_score = base_live_score * (1.0 + 0.5 / (i + 1))
+                live_results.append(SearchResult(
+                    page_id=0,
+                    url=entry.url,
+                    title=entry.title or entry.url,
+                    snippet=entry.summary or "",
+                    score=synth_score,
+                    ai_score=0.0,
+                ))
+
+            merged = live_results + results
+            merged.sort(key=lambda r: r.score, reverse=True)
+            results = merged[:limit]
+
+            if live_urls_to_enqueue:
+                from platysearch.live_news import enqueue_for_crawl
+                asyncio.create_task(enqueue_for_crawl(live_urls_to_enqueue))
+
+    return results
+
+
+async def _run_indexed_search(
+    db,
+    tokens: list[str],
+    term_ids: list[int],
+    matched_terms: dict[int, str],
+    num_query_terms: int,
+    tab: str,
+    limit: int,
+) -> list[SearchResult]:
+    """TF-IDF + authority + AI-penalty pipeline on already-resolved term ids."""
+    # ── Per-term document frequency for IDF ──────────────────────────
+    total_pages_rows = list(
+        await db.execute_fetchall("SELECT COUNT(*) FROM pages")
+    )
+    n_docs = max(
+        int(total_pages_rows[0][0]) if total_pages_rows else 1, 1
+    )
+
+    ph2 = ",".join("?" for _ in term_ids)
+    df_rows = await db.execute_fetchall(
+        f"""SELECT term_id, COUNT(*)
+            FROM postings WHERE term_id IN ({ph2}) GROUP BY term_id""",
+        term_ids,
+    )
+    idf_map: dict[int, float] = {
+        tid: math.log((n_docs + 1) / (df + 1)) + 1.0 for tid, df in df_rows
+    }
+    for tid in term_ids:
+        idf_map.setdefault(tid, 1.0)
+
+    idf_case = " ".join(
+        f"WHEN {int(tid)} THEN {idf_map[tid]:.6f}" for tid in term_ids
+    )
+    posting_rows = await db.execute_fetchall(
+        f"""SELECT page_id,
+                   SUM(tf * (CASE term_id {idf_case} ELSE 1.0 END))
+                       AS relevance,
+                   COUNT(DISTINCT term_id) AS matched_count
+            FROM postings
+            WHERE term_id IN ({ph2})
+            GROUP BY page_id
+            ORDER BY matched_count DESC, relevance DESC
+            LIMIT 200""",
+        term_ids,
+    )
+    scored = [(int(r[0]), float(r[1]), int(r[2])) for r in posting_rows]
+    if not scored:
+        return []
+
+    page_ids = [s[0] for s in scored]
+    relevance_map = {s[0]: s[1] for s in scored}
+    matched_count_map = {s[0]: s[2] for s in scored}
+
+    ph3 = ",".join("?" for _ in page_ids)
+
+    # Tab-based content-type filter.
+    type_filter = ""
+    query_params: list[object] = list(page_ids)
+    if tab == "news":
+        type_filter = "AND p.content_type = ?"
+        query_params.append("news")
+    elif tab == "images":
+        type_filter = "AND p.content_type = ?"
+        query_params.append("image")
+    elif tab == "video":
+        type_filter = "AND p.content_type = ?"
+        query_params.append("video")
+
+    page_rows = await db.execute_fetchall(
+        f"""SELECT p.id, p.url, p.title, p.body,
+                   COALESCE(s.inbound_links, 0),
+                   COALESCE(s.domain_diversity, 0),
+                   COALESCE(s.content_length, 0),
+                   COALESCE(s.ai_score, 0.0),
+                   COALESCE(s.quality_score, 0.0)
+            FROM pages p
+            LEFT JOIN page_scores s ON s.page_id = p.id
+            WHERE p.id IN ({ph3}) {type_filter}""",
+        query_params,
+    )
+
+    settings = get_settings()
+    results: list[SearchResult] = []
+
+    for row in page_rows:
+        (page_id, url, title, body, inbound, domain_div,
+         content_length, ai_score, quality_score) = row
+
+        relevance = relevance_map.get(page_id, 0.0)
+        matched_count = matched_count_map.get(page_id, 0)
+
+        authority = math.log1p(inbound) * (1 + 0.5 * math.log1p(domain_div))
+        length_factor = min(math.log1p(content_length) / 10, 1.0)
+
+        title_lower = (title or "").lower()
+        title_hits = sum(1 for t in tokens if t in title_lower)
+        title_boost = 1.0 + 0.6 * (title_hits / max(num_query_terms, 1))
+        if title_hits == 0:
+            title_boost *= 0.4
+
+        raw_score = (
+            relevance * 30.0
+            + authority * 2.0
+            + length_factor * 1.0
+            + quality_score * 1.0
+        ) * title_boost
+
+        if num_query_terms > 1 and matched_count < num_query_terms:
+            coverage = matched_count / num_query_terms
+            raw_score *= coverage * coverage
+
+        ai_multiplier = 1.0 - ai_score * (1.0 - settings.ai_penalty)
+        final_score = raw_score * ai_multiplier
+
+        domain = urlparse(url).netloc.lower()
+        if domain in _PREFERRED_DOMAINS:
+            final_score *= _PREFERRED_BOOST
+        elif domain in _SOCIAL_MEDIA_DOMAINS:
+            final_score *= _SOCIAL_MEDIA_PENALTY
+        elif domain in _DEMOTED_DOMAINS:
+            final_score *= _DEMOTED_PENALTY
+
+        snippet = _make_snippet(body or "", tokens)
+
+        results.append(SearchResult(
+            page_id=page_id,
+            url=url,
+            title=title or url,
+            snippet=snippet,
+            score=final_score,
+            ai_score=ai_score,
+        ))
+
+    results.sort(key=lambda r: r.score, reverse=True)
+    return results[:limit]
 
 
 async def _image_search(query: str, limit: int = 40) -> list[SearchResult]:
