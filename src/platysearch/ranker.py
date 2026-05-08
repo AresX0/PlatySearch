@@ -237,7 +237,7 @@ async def search(query: str, tab: str = "all", limit: int = 20) -> list[SearchRe
     if live_news_task is not None:
         live_entries: list = []
         try:
-            live_entries = await asyncio.wait_for(live_news_task, timeout=8)
+            live_entries = await asyncio.wait_for(live_news_task, timeout=15)
         except (asyncio.TimeoutError, Exception):
             log.debug("live news task timed out / failed", exc_info=True)
 
@@ -245,7 +245,10 @@ async def search(query: str, tab: str = "all", limit: int = 20) -> list[SearchRe
             existing_urls = {r.url for r in results}
             live_urls_to_enqueue: list[str] = []
             top_indexed_score = results[0].score if results else 100.0
-            base_live_score = max(top_indexed_score, 50.0)
+            # Live news outranks stale indexed pages: sit clearly above the
+            # top indexed result so breaking stories surface first, like
+            # the dedicated News tab on major search engines.
+            base_live_score = max(top_indexed_score * 1.5, 100.0)
 
             live_results: list[SearchResult] = []
             for i, entry in enumerate(live_entries):

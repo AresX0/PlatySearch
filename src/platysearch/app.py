@@ -18,14 +18,20 @@ from platysearch.ranker import search, SearchResult
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio as _asyncio
+
     from platysearch.database import init_db, mark_stale_jobs_crashed
     from platysearch.federation import init_federation_db
-    from platysearch.scheduler import start_scheduler, stop_scheduler
+    from platysearch.live_news import warm_cache
+    from platysearch.scheduler import _NEWS_FEEDS, start_scheduler, stop_scheduler
 
     await init_db()
     await mark_stale_jobs_crashed()
     await init_federation_db()
     start_scheduler()
+    # Warm the live-news RSS cache in the background so the first News
+    # search doesn't pay the cold-fetch cost (~10-15 s for 60 feeds).
+    _asyncio.create_task(warm_cache(_NEWS_FEEDS))
     yield
     stop_scheduler()
 

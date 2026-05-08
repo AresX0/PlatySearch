@@ -32,9 +32,58 @@ _CACHE_TTL_SECS = 10 * 60  # 10 min
 # Cap how many entries we hold in memory total.
 _MAX_ENTRIES = 5000
 # Max time we'll spend fetching feeds during a single refresh.
-_FETCH_TIMEOUT_SECS = 12
+_FETCH_TIMEOUT_SECS = 15
 # Per-feed entry cap.
 _PER_FEED_LIMIT = 40
+
+# Synonym groups — if any token in a group matches the query, every other
+# token in the group is treated as a query-side synonym when scoring entries.
+# Critical for breaking-news searches where the user types one term
+# ("compromise", "breach") but headlines use another ("hack", "hacked",
+# "cyberattack", "ransomware"). Mirrors how Google news ranks topical
+# breaking stories under any of these phrasings.
+_SYNONYM_GROUPS: list[set[str]] = [
+    {
+        "hack", "hacked", "hacking", "hackers", "hacker",
+        "breach", "breached", "breaches",
+        "compromise", "compromised",
+        "cyberattack", "cyberattacks", "attack", "attacked",
+        "intrusion", "intrusions",
+        "leak", "leaked", "leaks",
+        "ransomware", "exfiltration", "exfiltrated",
+        "exposed", "exposure",
+        "infiltrated", "infiltration",
+        "data-breach", "databreach",
+    },
+    {
+        "vulnerability", "vulnerabilities", "vuln", "vulns",
+        "exploit", "exploited", "exploits", "exploiting",
+        "flaw", "flaws", "bug", "bugs",
+        "zero-day", "zeroday", "0day",
+        "cve",
+    },
+    {
+        "malware", "virus", "trojan", "worm",
+        "spyware", "backdoor", "rootkit", "botnet",
+    },
+    {
+        "phishing", "phish", "smishing", "vishing", "scam", "scams",
+    },
+]
+
+
+def _expand_synonyms(tokens: list[str]) -> list[str]:
+    """Return the original tokens plus any synonyms from groups they hit."""
+    expanded: list[str] = list(tokens)
+    seen = set(tokens)
+    lowered = [t.lower() for t in tokens]
+    for group in _SYNONYM_GROUPS:
+        if any(t in group for t in lowered):
+            for syn in group:
+                if syn not in seen:
+                    seen.add(syn)
+                    expanded.append(syn)
+    return expanded
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -197,24 +246,51 @@ async def _ensure_cache(feeds: list[str]) -> None:
             _refresh_in_flight = False
 
 
-def _score_entry(entry: LiveNewsEntry, tokens: list[str]) -> float:
+def _score_entry(
+    entry: LiveNewsEntry,
+    original_tokens: list[str],
+    expanded_tokens: list[str],
+) -> float:
     """Lightweight relevance score: token hits in title + summary, with a
     small recency boost.  Returns 0 if the entry doesn't match the query.
+
+    Original tokens score full weight; synonyms (expansion) score partial.
+    Coverage is computed against the original tokens only — a synonym hit
+    counts as covering the original token in its group.
     """
-    if not tokens:
+    if not original_tokens:
         return 0.0
     title_lower = entry.title.lower()
     summary_lower = entry.summary.lower()
-    title_hits = sum(1 for t in tokens if t in title_lower)
-    summary_hits = sum(1 for t in tokens if t in summary_lower)
+
+    orig_set = set(original_tokens)
+    title_hits = 0.0
+    summary_hits = 0.0
+    for t in expanded_tokens:
+        weight = 1.0 if t in orig_set else 0.6
+        if t in title_lower:
+            title_hits += weight
+        if t in summary_lower:
+            summary_hits += weight
     if title_hits == 0 and summary_hits == 0:
         return 0.0
     score = title_hits * 5.0 + summary_hits * 1.0
-    # Coverage bonus when more query terms match.
-    matched = sum(
-        1 for t in tokens if t in title_lower or t in summary_lower
-    )
-    score *= (matched / max(len(tokens), 1)) ** 0.5
+
+    # Coverage: how many of the *original* tokens are covered, where a
+    # synonym hit counts as covering its group-mate.
+    covered = 0
+    for t in original_tokens:
+        if t in title_lower or t in summary_lower:
+            covered += 1
+            continue
+        # Check synonyms.
+        for group in _SYNONYM_GROUPS:
+            if t in group and any(
+                syn in title_lower or syn in summary_lower for syn in group
+            ):
+                covered += 1
+                break
+    score *= (covered / max(len(original_tokens), 1)) ** 0.5
 
     # Recency boost (up to ~1.5×) for items in the last 24h.
     if entry.published_ts > 0:
@@ -246,14 +322,25 @@ async def search_live_news(
     if not _cache:
         return []
 
+    expanded = _expand_synonyms(tokens)
     scored: list[tuple[float, LiveNewsEntry]] = []
     for entry in _cache:
-        s = _score_entry(entry, tokens)
+        s = _score_entry(entry, tokens, expanded)
         if s > 0:
             scored.append((s, entry))
 
     scored.sort(key=lambda x: x[0], reverse=True)
     return [e for _, e in scored[:limit]]
+
+
+async def warm_cache(feeds: list[str]) -> None:
+    """Populate the cache in the background at startup so the first search
+    doesn't pay the cold-fetch cost.  Safe to fire-and-forget.
+    """
+    try:
+        await _ensure_cache(feeds)
+    except Exception:
+        log.warning("Live news cache warm-up failed.", exc_info=True)
 
 
 async def enqueue_for_crawl(urls: list[str]) -> None:
