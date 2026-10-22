@@ -721,17 +721,17 @@ async def _nightly_update_inner(job: JobRun) -> None:
 
 
 def _persist_db(db_path: os.PathLike[str] | str) -> None:
-    """Copy the live DB to Azure persistent storage (/home/data/)."""
+    """Publish a safe SQLite snapshot to Azure persistent storage (/home/data/)."""
     import pathlib
-    import shutil
+
+    from platysearch.persistence import persist_database
 
     persist_dir = pathlib.Path("/home/data")
     if not persist_dir.exists():
         return  # not running on Azure App Service
     try:
         src = pathlib.Path(db_path)
-        if src.exists():
-            shutil.copy2(src, persist_dir / "platysearch.db")
+        if persist_database(src, persist_dir):
             log.info("DB persisted to %s (%.1f MB).", persist_dir, src.stat().st_size / (1024 * 1024))
     except Exception:
         log.exception("Failed to persist DB to %s.", persist_dir)

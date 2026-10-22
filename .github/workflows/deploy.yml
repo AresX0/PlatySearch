@@ -13,6 +13,8 @@ env:
 
 jobs:
   build-and-deploy:
+    # Incident/recovery commits can run tests without touching the production app.
+    if: ${{ !contains(github.event.head_commit.message, '[skip deploy]') }}
     runs-on: ubuntu-latest
 
     steps:
